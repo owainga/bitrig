@@ -557,17 +557,9 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 	}
 
 #ifdef __HAVE_PMAP_DIRECT
-	if (kv->kv_align || kv->kv_executable)
+	/* malloc isn't smart enough for direct mapping */
+	if (kv->kv_align || kv->kv_executable || kv == &kv_intrsafe)
 		goto alloc_va;
-#if 1
-	/*
-	 * For now, only do DIRECT mappings for single page
-	 * allocations, until we figure out a good way to deal
-	 * with contig allocations in km_free.
-	 */
-	if (!kv->kv_singlepage)
-		goto alloc_va;
-#endif
 	/*
 	 * Dubious optimization. If we got a contig segment, just map it
 	 * through the direct map.
@@ -674,11 +666,14 @@ km_free(void *v, size_t sz, const struct kmem_va_mode *kv,
 		goto free_va;
 	}
 
-	if (kv->kv_singlepage) {
 #ifdef __HAVE_PMAP_DIRECT
-		pg = pmap_unmap_direct(va);
-		uvm_pagefree(pg);
+	if (kv->kv_singlepage || pmap_is_direct_mapped(va)) {
+		for (va = sva; va < eva; va += PAGE_SIZE)
+			uvm_pagefree(pmap_unmap_direct(va));
+		return;
+	}
 #else
+	if (kv->kv_singlepage) {
 		struct uvm_km_free_page *fp = v;
 		mtx_enter(&uvm_km_pages.mtx);
 		fp->next = uvm_km_pages.freelist;
@@ -686,9 +681,9 @@ km_free(void *v, size_t sz, const struct kmem_va_mode *kv,
 		if (uvm_km_pages.freelistlen++ > 16)
 			wakeup(&uvm_km_pages.km_proc);
 		mtx_leave(&uvm_km_pages.mtx);
-#endif
 		return;
 	}
+#endif
 
 	if (kp->kp_pageable) {
 		pmap_remove(pmap_kernel(), sva, eva);
