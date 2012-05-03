@@ -234,6 +234,11 @@ typedef int		vm_prot_t;
 #define UVM_UNMAP_RM_HOLES	0x0002	/* Also remove holes in the map. */
 
 /*
+ * Operation flags.
+ */
+#define UVM_OP_ILEAVE		0x80000000	/* Yield during request. */
+
+/*
  * structures
  */
 

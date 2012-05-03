@@ -126,6 +126,7 @@ struct vm_map_entry	*uvm_mapent_alloc(struct vm_map*, int);
 void			 uvm_mapent_free(struct vm_map_entry*);
 void			 uvm_unmap_kill_entry(struct vm_map*,
 			    struct vm_map_entry*);
+void			 uvm_unmap_ileave(int);
 void			 uvm_mapent_mkfree(struct vm_map*,
 			    struct vm_map_entry*, struct vm_map_entry**,
 			    struct uvm_map_deadq*, boolean_t);
@@ -1779,6 +1780,23 @@ uvm_unmap_kill_entry(struct vm_map *map, struct vm_map_entry *entry)
 		pmap_remove(map->pmap, entry->start, entry->end);
 		pmap_update(map->pmap);
 	}
+}
+
+/*
+ * Execute sched/yield request during unmap.
+ */
+void
+uvm_unmap_ileave(int flags)
+{
+	/* Only interleave if it is allowed. */
+	if (!(flags & UVM_OP_ILEAVE))
+		return;
+
+	/* Reaper yields, other procs preempt. */
+	if (curproc() == reaperproc && !curcpu_is_idle())
+		yield();
+	else if (curcpu()->ci_schedstate.spc_schedflags & SPCF_SHOULDYIELD)
+		preempt(NULL);
 }
 
 /*
