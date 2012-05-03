@@ -625,7 +625,7 @@ sys_munmap(struct proc *p, void *v, register_t *retval)
 
 	addr = (vaddr_t) SCARG(uap, addr);
 	size = (vsize_t) SCARG(uap, len);
-	
+
 	/*
 	 * align the address to a page boundary, and adjust the size accordingly
 	 */
@@ -660,11 +660,11 @@ sys_munmap(struct proc *p, void *v, register_t *retval)
 	 * doit!
 	 */
 	TAILQ_INIT(&dead_entries);
-	uvm_unmap_remove(map, addr, addr + size, &dead_entries, 0);
+	uvm_unmap_remove(map, addr, addr + size, &dead_entries, UVM_OP_ILEAVE);
 
 	vm_map_unlock(map);	/* and unlock */
 
-	uvm_unmap_detach(&dead_entries, 0, 0);
+	uvm_unmap_detach(&dead_entries, 0, UVM_OP_ILEAVE);
 
 	return (0);
 }
@@ -995,7 +995,7 @@ uvm_mmap(vm_map_t map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
 		if (*addr & PAGE_MASK)
 			return(EINVAL);
 		uvmflag |= UVM_FLAG_FIXED;
-		uvm_unmap(map, *addr, *addr + size, 0);
+		uvm_unmap(map, *addr, *addr + size, UVM_OP_ILEAVE);
 	}
 
 	/*
@@ -1073,7 +1073,7 @@ uvm_mmap(vm_map_t map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
 			}
 			advice = UVM_ADV_RANDOM;
 		}
-		
+
 		if (uobj == NULL)
 			return((vp->v_type == VREG) ? ENOMEM : EINVAL);
 
@@ -1116,7 +1116,8 @@ uvm_mmap(vm_map_t map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
 				error = ENOMEM;
 				vm_map_unlock(map);
 				/* unmap the region! */
-				uvm_unmap(map, *addr, *addr + size, 0);
+				uvm_unmap(map, *addr, *addr + size,
+				    UVM_OP_ILEAVE);
 				goto bad;
 			}
 			/*
@@ -1127,7 +1128,8 @@ uvm_mmap(vm_map_t map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
 			    FALSE, UVM_LK_ENTER);
 			if (error != 0) {
 				/* unmap the region! */
-				uvm_unmap(map, *addr, *addr + size, 0);
+				uvm_unmap(map, *addr, *addr + size,
+				    UVM_OP_ILEAVE);
 				goto bad;
 			}
 			return (0);
