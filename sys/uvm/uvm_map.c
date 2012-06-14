@@ -1398,6 +1398,9 @@ uvm_unmap_detach(struct uvm_map_deadq *deadq, int amapflags, int flags)
 		 */
 		TAILQ_REMOVE(deadq, entry, dfree.deadq);
 		uvm_mapent_free(entry);
+
+		/* Allow other calls into kernel. */
+		uvm_ileave(flags);
 	}
 }
 
@@ -1638,6 +1641,8 @@ uvm_unmap(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 
 	KASSERT((start & (vaddr_t)PAGE_MASK) == 0 &&
 	    (end & (vaddr_t)PAGE_MASK) == 0);
+	/* Cannot interleave on intrsafe maps. */
+	KASSERT(!(flags & UVM_OP_ILEAVE) || !(map->flags & VM_MAP_INTRSAFE));
 
 	TAILQ_INIT(&dead);
 	vm_map_lock(map);
@@ -1872,6 +1877,9 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 		 */
 		uvm_mapent_mkfree(map, entry, &prev_hint, dead,
 		    !(flags & UVM_UNMAP_NO_FREE));
+
+		/* Allow other calls into kernel. */
+		uvm_ileave(flags);
 	}
 
 	pmap_update(vm_map_pmap(map));
@@ -2379,7 +2387,7 @@ uvm_map_teardown(struct vm_map *map, int flags)
 	 *   is black, the rest is grey.
 	 * The set [entry, end] is also referred to as the wavefront.
 	 *
-	 * Since the tree is always a fully connected graph, the breadth-first
+	 * Since the tree is always a minimal connected graph, the breadth-first
 	 * search guarantees that each vmmap_entry is visited exactly once.
 	 * The vm_map is broken down in linear time.
 	 */
@@ -2394,6 +2402,9 @@ uvm_map_teardown(struct vm_map *map, int flags)
 			DEAD_ENTRY_PUSH(&dead_entries, tmp);
 		/* Update wave-front. */
 		entry = TAILQ_NEXT(entry, dfree.deadq);
+
+		/* Allow other calls into kernel. */
+		uvm_ileave(flags);
 	}
 
 	if ((map->flags & VM_MAP_INTRSAFE) == 0)
@@ -3176,7 +3187,7 @@ uvmspace_exec(struct proc *p, vaddr_t start, vaddr_t end)
 	pmap_activate(p);
 
 	/* Throw away the old vmspace. */
-	uvmspace_free(old, 0);
+	uvmspace_free(old, UVM_OP_ILEAVE);
 }
 
 /*

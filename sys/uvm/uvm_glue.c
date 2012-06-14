@@ -454,3 +454,41 @@ uvm_atopg(vaddr_t kva)
 	KASSERT(pg != NULL);
 	return (pg);
 } 
+
+/*
+ * Allow other processes to run, if UVM_OP_ILEAVE is set in flags.
+ * Otherwise, this is a noop.
+ */
+void
+uvm_ileave(int flags)
+{
+	/* Only interleave if allowed. */
+	if (!(flags & UVM_OP_ILEAVE))
+		return;
+
+	/* Must be allowed to sleep. */
+	assertwaitok();
+
+	/*
+	 * XXX Code below is incomplete: it is missing an important case.
+	 *
+	 * When another process wants to enter the kernel but we hold biglock,
+	 * it will spin, basically incrementing the number of cpus on the
+	 * current task by 1.
+	 *
+	 * We should detect that another process is entering a syscall and
+	 * allow it to enter and do its work.  If this is a short system
+	 * call, it will mean the other process can continue quickly with
+	 * userspace work.  If it is an expensive system call, the process
+	 * should have a similar mechanic as here to preempt.
+	 *
+	 * Unfortunately, kernel_lock does not currently allow us to figure
+	 * out if another cpu is blocked.
+	 */
+
+	/* Reaper yields, other procs preempt. */
+	if (curproc == reaperproc && !curcpu_is_idle())
+		yield();
+	else if (curcpu()->ci_schedstate.spc_schedflags & SPCF_SHOULDYIELD)
+		preempt(NULL);
+}

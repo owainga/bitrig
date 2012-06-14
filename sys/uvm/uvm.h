@@ -172,6 +172,9 @@ struct uvm_addr_state	*uvm_map_uaddr_e(struct vm_map*, struct vm_map_entry*);
 #define VMMAP_FREE_END(_entry)		((_entry)->end + (_entry)->guard + \
 					    (_entry)->fspace)
 
+/* uvm interleave functionality. */
+void			 uvm_ileave(int);
+
 #endif /* _KERNEL */
 
 #endif /* _UVM_UVM_H_ */
