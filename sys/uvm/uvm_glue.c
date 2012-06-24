@@ -323,7 +323,7 @@ uvm_exit(struct proc *p)
 {
 	extern struct kmem_va_mode kv_fork;
 
-	uvmspace_free(p->p_vmspace, 0);
+	uvmspace_free(p->p_vmspace, UVM_OP_ILEAVE);
 	p->p_vmspace = NULL;
 	km_free(p->p_addr, USPACE, &kv_fork, &kp_dma);
 	p->p_addr = NULL;
