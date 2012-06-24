@@ -402,14 +402,14 @@ int		uvm_map_reserve(vm_map_t, vsize_t, vaddr_t, vsize_t,
 		    vaddr_t *);
 void		uvm_map_setup(vm_map_t, vaddr_t, vaddr_t, int);
 int		uvm_map_submap(vm_map_t, vaddr_t, vaddr_t, vm_map_t);
-void		uvm_unmap(vm_map_t, vaddr_t, vaddr_t);
+void		uvm_unmap(vm_map_t, vaddr_t, vaddr_t, int);
 void		uvm_map_set_uaddr(struct vm_map*, struct uvm_addr_state**,
 		    struct uvm_addr_state*);
 int		uvm_map_mquery(struct vm_map*, vaddr_t*, vsize_t, voff_t, int);
 
-void		uvm_unmap_detach(struct uvm_map_deadq*, int);
+void		uvm_unmap_detach(struct uvm_map_deadq*, int, int);
 void		uvm_unmap_remove(struct vm_map*, vaddr_t, vaddr_t,
-		    struct uvm_map_deadq*, boolean_t, boolean_t);
+		    struct uvm_map_deadq*, int);
 
 #endif /* _KERNEL */
 

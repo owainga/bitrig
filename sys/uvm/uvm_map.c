@@ -137,7 +137,7 @@ int			 uvm_map_pageable_wire(struct vm_map*,
 			    vaddr_t, vaddr_t, int);
 void			 uvm_map_setup_entries(struct vm_map*);
 void			 uvm_map_setup_md(struct vm_map*);
-void			 uvm_map_teardown(struct vm_map*);
+void			 uvm_map_teardown(struct vm_map*, int);
 void			 uvm_map_vmspace_update(struct vm_map*,
 			    struct uvm_map_deadq*, int);
 void			 uvm_map_kmem_grow(struct vm_map*,
@@ -1210,7 +1210,7 @@ unlock:
 	 * uvm_map_mkentry may also create dead entries, when it attempts to
 	 * destroy free-space entries.
 	 */
-	uvm_unmap_detach(&dead, 0);
+	uvm_unmap_detach(&dead, 0, 0);
 	return error;
 }
 
@@ -1366,7 +1366,7 @@ uvm_mapent_tryjoin(struct vm_map *map, struct vm_map_entry *entry,
  * Kill entries that are no longer in a map.
  */
 void
-uvm_unmap_detach(struct uvm_map_deadq *deadq, int flags)
+uvm_unmap_detach(struct uvm_map_deadq *deadq, int amapflags, int flags)
 {
 	struct vm_map_entry *entry;
 
@@ -1378,7 +1378,7 @@ uvm_unmap_detach(struct uvm_map_deadq *deadq, int flags)
 			amap_unref(entry->aref.ar_amap,
 			    entry->aref.ar_pageoff,
 			    atop(entry->end - entry->start),
-			    flags);
+			    amapflags);
 
 		/*
 		 * Drop reference to our backing object, if we've got one.
@@ -1631,18 +1631,19 @@ uvm_map_pie(vaddr_t align)
 }
 
 void
-uvm_unmap(struct vm_map *map, vaddr_t start, vaddr_t end)
+uvm_unmap(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 {
 	struct uvm_map_deadq dead;
 
 	KASSERT((start & (vaddr_t)PAGE_MASK) == 0 &&
 	    (end & (vaddr_t)PAGE_MASK) == 0);
+
 	TAILQ_INIT(&dead);
 	vm_map_lock(map);
-	uvm_unmap_remove(map, start, end, &dead, FALSE, TRUE);
+	uvm_unmap_remove(map, start, end, &dead, flags);
 	vm_map_unlock(map);
 
-	uvm_unmap_detach(&dead, 0);
+	uvm_unmap_detach(&dead, 0, flags);
 }
 
 /*
@@ -1783,14 +1784,13 @@ uvm_unmap_kill_entry(struct vm_map *map, struct vm_map_entry *entry)
 /*
  * Remove all entries from start to end.
  *
- * If remove_holes, then remove ET_HOLE entries as well.
- * If markfree, entry will be properly marked free, otherwise, no replacement
- * entry will be put in the tree (corrupting the tree).
+ * If UVM_UNMAP_RM_HOLES, then remove ET_HOLE entries as well.
+ * If UVM_UNMAP_FREE, entry will be properly marked free, otherwise,
+ * no replacement entry will be put in the tree (corrupting the tree).
  */
 void
 uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
-    struct uvm_map_deadq *dead, boolean_t remove_holes,
-    boolean_t markfree)
+    struct uvm_map_deadq *dead, int flags)
 {
 	struct vm_map_entry *prev_hint, *next, *entry;
 
@@ -1809,7 +1809,7 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 	 */
 	entry = uvm_map_entrybyaddr(&map->addr, start);
 	KDASSERT(entry != NULL && entry->start <= start);
-	if (entry->end <= start && markfree)
+	if (entry->end <= start && !(flags & UVM_UNMAP_NO_FREE))
 		entry = RB_NEXT(uvm_map_addr, &map->addr, entry);
 	else
 		UVM_MAP_CLIP_START(map, entry, start);
@@ -1821,14 +1821,14 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 	prev_hint = NULL;
 	for (; entry != NULL && entry->start < end; entry = next) {
 		KDASSERT(entry->start >= start);
-		if (entry->end > end || !markfree)
+		if (entry->end > end || (flags & UVM_UNMAP_NO_FREE))
 			UVM_MAP_CLIP_END(map, entry, end);
 		KDASSERT(entry->start >= start && entry->end <= end);
 		next = RB_NEXT(uvm_map_addr, &map->addr, entry);
 
 		/* Don't remove holes unless asked to do so. */
 		if (UVM_ET_ISHOLE(entry)) {
-			if (!remove_holes) {
+			if (!(flags & UVM_UNMAP_RM_HOLES)) {
 				prev_hint = entry;
 				continue;
 			}
@@ -1852,13 +1852,14 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 		/*
 		 * Actual removal of entry.
 		 */
-		uvm_mapent_mkfree(map, entry, &prev_hint, dead, markfree);
+		uvm_mapent_mkfree(map, entry, &prev_hint, dead,
+		    !(flags & UVM_UNMAP_NO_FREE));
 	}
 
 	pmap_update(vm_map_pmap(map));
 
 #ifdef VMMAP_DEBUG
-	if (markfree) {
+	if (!(flags & UVM_UNMAP_NO_FREE)) {
 		for (entry = uvm_map_entrybyaddr(&map->addr, start);
 		    entry != NULL && entry->start < end;
 		    entry = RB_NEXT(uvm_map_addr, &map->addr, entry)) {
@@ -2314,7 +2315,7 @@ uvm_map_setup(struct vm_map *map, vaddr_t min, vaddr_t max, int flags)
  * This is the inverse operation to uvm_map_setup.
  */
 void
-uvm_map_teardown(struct vm_map *map)
+uvm_map_teardown(struct vm_map *map, int flags)
 {
 	struct uvm_map_deadq	 dead_entries;
 	int			 i;
@@ -2322,6 +2323,9 @@ uvm_map_teardown(struct vm_map *map)
 #ifdef VMMAP_DEBUG
 	size_t			 numq, numt;
 #endif
+
+	/* Flags argument is not yet in use. */
+	KASSERT(flags == 0);
 
 	if ((map->flags & VM_MAP_INTRSAFE) == 0) {
 		if (rw_enter(&map->vmm_rwlock, RW_NOSLEEP | RW_WRITE) != 0)
@@ -2387,7 +2391,7 @@ uvm_map_teardown(struct vm_map *map)
 		numq++;
 	KASSERT(numt == numq);
 #endif
-	uvm_unmap_detach(&dead_entries, 0);
+	uvm_unmap_detach(&dead_entries, 0, flags);
 	pmap_destroy(map->pmap);
 	map->pmap = NULL;
 }
@@ -3154,7 +3158,7 @@ uvmspace_exec(struct proc *p, vaddr_t start, vaddr_t end)
 	pmap_activate(p);
 
 	/* Throw away the old vmspace. */
-	uvmspace_free(old);
+	uvmspace_free(old, 0);
 }
 
 /*
@@ -3164,7 +3168,7 @@ uvmspace_exec(struct proc *p, vaddr_t start, vaddr_t end)
  */
 
 void
-uvmspace_free(struct vmspace *vm)
+uvmspace_free(struct vmspace *vm, int flags)
 {
 	if (--vm->vm_refcnt == 0) {
 		/*
@@ -3178,7 +3182,7 @@ uvmspace_free(struct vmspace *vm)
 			shmexit(vm);
 #endif
 
-		uvm_map_teardown(&vm->vm_map);
+		uvm_map_teardown(&vm->vm_map, flags);
 		pool_put(&uvm_vmspace_pool, vm);
 	}
 }
@@ -3526,7 +3530,7 @@ uvmspace_fork(struct vmspace *vm1)
 	 * This can actually happen, if multiple entries described a
 	 * space in which an entry was inherited.
 	 */
-	uvm_unmap_detach(&dead, 0);
+	uvm_unmap_detach(&dead, 0, 0);
 
 #ifdef SYSVSHM
 	if (vm1->vm_shm)
@@ -3683,30 +3687,20 @@ void
 uvm_map_deallocate(vm_map_t map)
 {
 	int c;
-	struct uvm_map_deadq dead;
 
 	simple_lock(&map->ref_lock);
 	c = --map->ref_count;
 	simple_unlock(&map->ref_lock);
-	if (c > 0) {
+	if (c > 0)
 		return;
-	}
 
 	/*
 	 * all references gone.   unmap and free.
 	 *
 	 * No lock required: we are only one to access this map.
 	 */
-
-	TAILQ_INIT(&dead);
-	uvm_tree_sanity(map, __FILE__, __LINE__);
-	uvm_unmap_remove(map, map->min_offset, map->max_offset, &dead,
-	    TRUE, FALSE);
-	pmap_destroy(map->pmap);
-	KASSERT(RB_EMPTY(&map->addr));
+	uvm_map_teardown(map, 0);
 	free(map, M_VMMAP);
-
-	uvm_unmap_detach(&dead, 0);
 }
 
 /* 
@@ -3961,10 +3955,8 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 	 * Unmap copied entries on failure.
 	 */
 fail2_unmap:
-	if (error) {
-		uvm_unmap_remove(kernel_map, dstaddr, dstaddr + len, &dead,
-		    FALSE, TRUE);
-	}
+	if (error)
+		uvm_unmap_remove(kernel_map, dstaddr, dstaddr + len, &dead, 0);
 
 	/*
 	 * Release maps, release dead entries.
@@ -3975,7 +3967,7 @@ fail2:
 fail:
 	vm_map_unlock(srcmap);
 
-	uvm_unmap_detach(&dead, 0);
+	uvm_unmap_detach(&dead, 0, 0);
 
 	return error;
 }
@@ -4548,7 +4540,7 @@ uvm_map_set_uaddr(struct vm_map *map, struct uvm_addr_state **which,
 
 	uvm_map_freelist_update_refill(map, 0);
 	vm_map_unlock(map);
-	uvm_unmap_detach(&dead, 0);
+	uvm_unmap_detach(&dead, 0, 0);
 }
 
 /*

@@ -228,6 +228,12 @@ typedef int		vm_prot_t;
 #define	PHYSLOAD_DEVICE	0x01	/* don't add to the page queue */
 
 /*
+ * Flags to uvm_unmap_detach.
+ */
+#define UVM_UNMAP_NO_FREE	0x0001	/* Don't mark unmapped as free. */
+#define UVM_UNMAP_RM_HOLES	0x0002	/* Also remove holes in the map. */
+
+/*
  * structures
  */
 
@@ -628,7 +634,7 @@ void			uvmspace_init(struct vmspace *, struct pmap *,
 				vaddr_t, vaddr_t, boolean_t, boolean_t);
 void			uvmspace_exec(struct proc *, vaddr_t, vaddr_t);
 struct vmspace		*uvmspace_fork(struct vmspace *);
-void			uvmspace_free(struct vmspace *);
+void			uvmspace_free(struct vmspace *, int);
 void			uvmspace_share(struct proc *, struct proc *);
 
 

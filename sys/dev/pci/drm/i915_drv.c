@@ -4080,7 +4080,7 @@ i915_gem_cleanup_hws(struct inteldrm_softc *dev_priv)
 	obj = dev_priv->hws_obj;
 
 	uvm_unmap(kernel_map, (vaddr_t)dev_priv->hw_status_page,
-	    (vaddr_t)dev_priv->hw_status_page + PAGE_SIZE);
+	    (vaddr_t)dev_priv->hw_status_page + PAGE_SIZE, 0);
 	dev_priv->hw_status_page = NULL;
 	drm_hold_object(obj);
 	i915_gem_object_unpin(obj);

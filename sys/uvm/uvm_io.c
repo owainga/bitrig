@@ -141,9 +141,9 @@ uvm_io(vm_map_t map, struct uio *uio, int flags)
 		vm_map_lock(kernel_map);
 		TAILQ_INIT(&dead_entries);
 		uvm_unmap_remove(kernel_map, kva, kva+chunksz,
-		    &dead_entries, FALSE, TRUE);
+		    &dead_entries, 0);
 		vm_map_unlock(kernel_map);
-		uvm_unmap_detach(&dead_entries, AMAP_REFALL);
+		uvm_unmap_detach(&dead_entries, AMAP_REFALL, 0);
 
 		/*
 		 * We defer checking the error return from uiomove until

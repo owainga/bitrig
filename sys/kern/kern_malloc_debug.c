@@ -258,7 +258,7 @@ debug_malloc_allocate_free(int wait)
 			break;
 
 		if (wait == 0) {
-			uvm_unmap(kmem_map, va, va + PAGE_SIZE * 2);
+			uvm_unmap(kmem_map, va, va + PAGE_SIZE * 2, 0);
 			pool_put(&debug_malloc_pool, md);
 			return;
 		}

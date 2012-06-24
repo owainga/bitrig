@@ -1278,10 +1278,10 @@ pmap_free_pvpage(void)
 		/* unmap the page */
 		TAILQ_INIT(&dead_entries);
 		uvm_unmap_remove(map, (vaddr_t)pvp, ((vaddr_t)pvp) + PAGE_SIZE,
-		    &dead_entries, FALSE, TRUE);
+		    &dead_entries, 0);
 		vm_map_unlock(map);
 
-		uvm_unmap_detach(&dead_entries, 0);
+		uvm_unmap_detach(&dead_entries, 0, 0);
 
 		pv_nfpvents -= PVE_PER_PVPAGE;  /* update free count */
 	}

@@ -480,7 +480,7 @@ uvm_km_thread(void *arg)
 			for (; i < nitems(pg); i++) {
 				if (pg[i] != 0) {
 					uvm_unmap(kernel_map,
-					    pg[i], pg[i] + PAGE_SIZE);
+					    pg[i], pg[i] + PAGE_SIZE, 0);
 				}
 			}
 		}
@@ -511,7 +511,7 @@ uvm_km_doputpage(struct uvm_km_free_page *fp)
 	mtx_leave(&uvm_km_pages.mtx);
 
 	if (freeva)
-		uvm_unmap(kernel_map, va, va + PAGE_SIZE);
+		uvm_unmap(kernel_map, va, va + PAGE_SIZE, 0);
 
 	uvm_pagefree(pg);
 	return (nextfp);
@@ -712,7 +712,7 @@ km_free(void *v, size_t sz, const struct kmem_va_mode *kv,
 		uvm_pglistfree(&pgl);
 	}
 free_va:
-	uvm_unmap(*kv->kv_map, sva, eva);
+	uvm_unmap(*kv->kv_map, sva, eva, 0);
 	if (kv->kv_wait)
 		wakeup(*kv->kv_map);
 }

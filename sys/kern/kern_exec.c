@@ -819,7 +819,7 @@ exec_sigcode_map(struct proc *p, struct emul *e)
 			return (ENOMEM);
 		}
 		memcpy((void *)va, e->e_sigcode, sz);
-		uvm_unmap(kernel_map, va, va + round_page(sz));
+		uvm_unmap(kernel_map, va, va + round_page(sz), 0);
 	}
 
 	p->p_sigcode = 0; /* no hint */

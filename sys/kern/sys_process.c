@@ -726,7 +726,7 @@ process_domem(struct proc *curp, struct proc *p, struct uio *uio, int req)
 	error = uvm_io(&vm->vm_map, uio,
 	    (req == PT_WRITE_I) ? UVM_IO_FIXPROT : 0);
 
-	uvmspace_free(vm);
+	uvmspace_free(vm, 0);
 
 	if (error == 0 && req == PT_WRITE_I)
 		pmap_proc_iflush(p, addr, len);
