@@ -156,7 +156,7 @@ int			 uvm_map_sel_limits(vaddr_t*, vaddr_t*, vsize_t, int,
 int			 uvm_map_findspace(struct vm_map*,
 			    struct vm_map_entry**, struct vm_map_entry**,
 			    vaddr_t*, vsize_t, vaddr_t, vaddr_t, vm_prot_t,
-			    vaddr_t);
+			    vaddr_t, int);
 vsize_t			 uvm_map_addr_augment_get(struct vm_map_entry*);
 void			 uvm_map_addr_augment(struct vm_map_entry*);
 
@@ -872,7 +872,8 @@ uvm_map_isavail(struct vm_map *map, struct uvm_addr_state *uaddr,
 int
 uvm_map_findspace(struct vm_map *map, struct vm_map_entry**first,
     struct vm_map_entry**last, vaddr_t *addr, vsize_t sz,
-    vaddr_t pmap_align, vaddr_t pmap_offset, vm_prot_t prot, vaddr_t hint)
+    vaddr_t pmap_align, vaddr_t pmap_offset, vm_prot_t prot, vaddr_t hint,
+    int flags)
 {
 	struct uvm_addr_state *uaddr;
 	int i;
@@ -885,7 +886,7 @@ uvm_map_findspace(struct vm_map *map, struct vm_map_entry**first,
 		uaddr = map->uaddr_any[i];
 
 		if (uvm_addr_invoke(map, uaddr, first, last,
-		    addr, sz, pmap_align, pmap_offset, prot, hint) == 0)
+		    addr, sz, pmap_align, pmap_offset, prot, hint, flags) == 0)
 			return 0;
 	}
 
@@ -894,7 +895,7 @@ uvm_map_findspace(struct vm_map *map, struct vm_map_entry**first,
 	 */
 	uaddr = map->uaddr_brk_stack;
 	if (uvm_addr_invoke(map, uaddr, first, last,
-	    addr, sz, pmap_align, pmap_offset, prot, hint) == 0)
+	    addr, sz, pmap_align, pmap_offset, prot, hint, flags) == 0)
 		return 0;
 
 	return ENOMEM;
@@ -1096,7 +1097,7 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 		 * Run selection algorithm for executables.
 		 */
 		error = uvm_addr_invoke(map, map->uaddr_exe, &first, &last,
-		    addr, sz, pmap_align, pmap_offset, prot, hint);
+		    addr, sz, pmap_align, pmap_offset, prot, hint, opflags);
 
 		/*
 		 * Grow kernel memory and try again.
@@ -1106,7 +1107,7 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 
 			error = uvm_addr_invoke(map, map->uaddr_exe,
 			    &first, &last, addr, sz,
-			    pmap_align, pmap_offset, prot, hint);
+			    pmap_align, pmap_offset, prot, hint, opflags);
 		}
 
 		if (error != 0)
@@ -1119,7 +1120,7 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 			uvm_map_vmspace_update(map, &dead, flags);
 
 		error = uvm_map_findspace(map, &first, &last, addr, sz,
-		    pmap_align, pmap_offset, prot, hint);
+		    pmap_align, pmap_offset, prot, hint, opflags);
 
 		/*
 		 * Grow kernel memory and try again.
@@ -1128,7 +1129,7 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 			uvm_map_kmem_grow(map, &dead, sz, flags);
 
 			error = uvm_map_findspace(map, &first, &last, addr, sz,
-			    pmap_align, pmap_offset, prot, hint);
+			    pmap_align, pmap_offset, prot, hint, opflags);
 		}
 
 		if (error != 0)
@@ -3918,7 +3919,7 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 
 	if (uvm_map_findspace(kernel_map, &tmp1, &tmp2, &dstaddr, len,
 	    MAX(PAGE_SIZE, PMAP_PREFER_ALIGN()), PMAP_PREFER_OFFSET(start),
-	    VM_PROT_NONE, 0) != 0) {
+	    VM_PROT_NONE, 0, UVM_OP_ILEAVE) != 0) {
 		error = ENOMEM;
 		goto fail2;
 	}

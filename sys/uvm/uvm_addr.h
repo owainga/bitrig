@@ -58,7 +58,7 @@ struct uvm_addr_functions {
 	    struct uvm_addr_state *uaddr,
 	    struct vm_map_entry**entry_out, vaddr_t *addr_out,
 	    vsize_t sz, vaddr_t align, vaddr_t offset,
-	    vm_prot_t prot, vaddr_t hint);
+	    vm_prot_t prot, vaddr_t hint, int);
 	void (*uaddr_free_insert)(struct vm_map *map,
 	    struct uvm_addr_state *uaddr_state,
 	    struct vm_map_entry *entry);
@@ -83,11 +83,12 @@ int			 uvm_addr_linsearch(struct vm_map*,
 			    struct uvm_addr_state*, struct vm_map_entry**,
 			    vaddr_t *addr_out, vaddr_t, vsize_t,
 			    vaddr_t, vaddr_t, int, vaddr_t, vaddr_t,
-			    vsize_t, vsize_t);
+			    vsize_t, vsize_t, int);
 int			 uvm_addr_invoke(struct vm_map*,
 			    struct uvm_addr_state*, struct vm_map_entry**,
 			    struct vm_map_entry**, vaddr_t*,
-			    vsize_t, vaddr_t, vaddr_t, vm_prot_t, vaddr_t);
+			    vsize_t, vaddr_t, vaddr_t, vm_prot_t, vaddr_t,
+			    int);
 struct uvm_addr_state	*uaddr_lin_create(vaddr_t, vaddr_t);
 struct uvm_addr_state	*uaddr_rnd_create(vaddr_t, vaddr_t);
 struct uvm_addr_state	*uaddr_hint_create(vaddr_t, vaddr_t, vsize_t);
