@@ -126,7 +126,6 @@ struct vm_map_entry	*uvm_mapent_alloc(struct vm_map*, int);
 void			 uvm_mapent_free(struct vm_map_entry*);
 void			 uvm_unmap_kill_entry(struct vm_map*,
 			    struct vm_map_entry*);
-void			 uvm_unmap_ileave(int);
 void			 uvm_mapent_mkfree(struct vm_map*,
 			    struct vm_map_entry*, struct vm_map_entry**,
 			    struct uvm_map_deadq*, boolean_t);
@@ -971,8 +970,16 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 	vm_inherit_t		 inherit;
 	int			 advice;
 	int			 error;
+	int			 opflags;
 	vaddr_t			 pmap_align, pmap_offset;
 	vaddr_t			 hint;
+
+
+	if ((map->flags & VM_MAP_INTRSAFE) == 0 &&
+	    (flags & UVM_FLAG_TRYLOCK) == 0)
+		opflags = UVM_OP_ILEAVE;
+	else
+		opflags = 0;
 
 	if ((map->flags & VM_MAP_INTRSAFE) == 0)
 		splassert(IPL_NONE);
@@ -1211,7 +1218,7 @@ unlock:
 	 * uvm_map_mkentry may also create dead entries, when it attempts to
 	 * destroy free-space entries.
 	 */
-	uvm_unmap_detach(&dead, 0, 0);
+	uvm_unmap_detach(&dead, 0, opflags);
 	return error;
 }
 
@@ -1785,23 +1792,6 @@ uvm_unmap_kill_entry(struct vm_map *map, struct vm_map_entry *entry)
 		pmap_remove(map->pmap, entry->start, entry->end);
 		pmap_update(map->pmap);
 	}
-}
-
-/*
- * Execute sched/yield request during unmap.
- */
-void
-uvm_unmap_ileave(int flags)
-{
-	/* Only interleave if it is allowed. */
-	if (!(flags & UVM_OP_ILEAVE))
-		return;
-
-	/* Reaper yields, other procs preempt. */
-	if (curproc() == reaperproc && !curcpu_is_idle())
-		yield();
-	else if (curcpu()->ci_schedstate.spc_schedflags & SPCF_SHOULDYIELD)
-		preempt(NULL);
 }
 
 /*
@@ -3506,6 +3496,7 @@ uvmspace_fork(struct vmspace *vm1)
 	struct vm_map_entry *old_entry;
 	struct uvm_map_deadq dead;
 
+	assertwaitok();
 	vm_map_lock(old_map);
 
 	vm2 = uvmspace_alloc(old_map->min_offset, old_map->max_offset,
@@ -3550,16 +3541,18 @@ uvmspace_fork(struct vmspace *vm1)
 			uvm_mapent_forkcopy(vm2, new_map,
 			    old_map, old_entry, &dead);
 		}
+
+		uvm_ileave(UVM_OP_ILEAVE);
 	}
 
-	vm_map_unlock(old_map); 
-	vm_map_unlock(new_map); 
+	vm_map_unlock(old_map);
+	vm_map_unlock(new_map);
 
 	/*
 	 * This can actually happen, if multiple entries described a
 	 * space in which an entry was inherited.
 	 */
-	uvm_unmap_detach(&dead, 0, 0);
+	uvm_unmap_detach(&dead, 0, UVM_OP_ILEAVE);
 
 #ifdef SYSVSHM
 	if (vm1->vm_shm)
@@ -3570,7 +3563,7 @@ uvmspace_fork(struct vmspace *vm1)
 	pmap_fork(vm1->vm_map.pmap, vm2->vm_map.pmap);
 #endif
 
-	return vm2;    
+	return vm2;
 }
 
 /*
@@ -3851,6 +3844,7 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 	vsize_t cp_len, cp_off;
 	int error;
 
+	assertwaitok();
 	TAILQ_INIT(&dead);
 	end = start + len;
 
@@ -3984,8 +3978,10 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 	 * Unmap copied entries on failure.
 	 */
 fail2_unmap:
-	if (error)
-		uvm_unmap_remove(kernel_map, dstaddr, dstaddr + len, &dead, 0);
+	if (error) {
+		uvm_unmap_remove(kernel_map, dstaddr, dstaddr + len, &dead,
+		    UVM_OP_ILEAVE);
+	}
 
 	/*
 	 * Release maps, release dead entries.
@@ -3996,7 +3992,7 @@ fail2:
 fail:
 	vm_map_unlock(srcmap);
 
-	uvm_unmap_detach(&dead, 0, 0);
+	uvm_unmap_detach(&dead, 0, UVM_OP_ILEAVE);
 
 	return error;
 }

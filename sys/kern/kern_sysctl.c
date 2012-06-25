@@ -1754,7 +1754,7 @@ more:
 	error = copyout(&rarg, rargv, sizeof(rarg));
 
 out:
-	uvmspace_free(vm, 0);
+	uvmspace_free(vm, UVM_OP_ILEAVE);
 	free(buf, M_TEMP);
 	return (error);
 }

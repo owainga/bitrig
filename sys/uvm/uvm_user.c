@@ -60,5 +60,5 @@ uvm_deallocate(struct vm_map *map, vaddr_t start, vsize_t size)
 	if (size == 0)
 		return;
 
-	uvm_unmap(map, trunc_page(start), round_page(start+size), 0);
+	uvm_unmap(map, trunc_page(start), round_page(start + size), 0);
 }
