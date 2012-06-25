@@ -2340,9 +2340,6 @@ uvm_map_teardown(struct vm_map *map, int flags)
 	size_t			 numq, numt;
 #endif
 
-	/* Flags argument is not yet in use. */
-	KASSERT(flags == 0);
-
 	if ((map->flags & VM_MAP_INTRSAFE) == 0) {
 		if (rw_enter(&map->vmm_rwlock, RW_NOSLEEP | RW_WRITE) != 0)
 			panic("uvm_map_teardown: rw_enter failed on free map");
