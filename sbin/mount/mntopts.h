@@ -52,17 +52,18 @@ union mntval {
 
 /* User-visible MNT_ flags. */
 #define MOPT_ASYNC	{ "async",	MNT_ASYNC, MFLAG_SET }
-#define MOPT_NOACCESSTIME	{ "accesstime", MNT_NOATIME,		\
-					MFLAG_INVERSE | MFLAG_SET }
-#define MOPT_NOATIME	{ "atime",      MNT_NOATIME, MFLAG_INVERSE | MFLAG_SET }
+#define MOPT_MAGICLINKS	{ "magiclinks",	MNT_MAGICLINKS, MFLAG_SET }
+#define MOPT_NOACCESSTIME { "accesstime", MNT_NOATIME, MFLAG_INVERSE	\
+					    | MFLAG_SET }
+#define MOPT_NOATIME	{ "atime",	MNT_NOATIME, MFLAG_INVERSE | MFLAG_SET }
 #define MOPT_NODEV	{ "dev",	MNT_NODEV, MFLAG_INVERSE | MFLAG_SET }
 #define MOPT_NOEXEC	{ "exec",	MNT_NOEXEC, MFLAG_INVERSE | MFLAG_SET }
 #define MOPT_NOSUID	{ "suid",	MNT_NOSUID, MFLAG_INVERSE | MFLAG_SET }
 #define MOPT_RDONLY	{ "rdonly",	MNT_RDONLY, MFLAG_SET }
 #define MOPT_SYNC	{ "sync",	MNT_SYNCHRONOUS, MFLAG_SET }
-#define MOPT_USERQUOTA	{ "userquota",	0, MFLAG_SET | MFLAG_STRVAL \
+#define MOPT_USERQUOTA	{ "userquota",	0, MFLAG_SET | MFLAG_STRVAL	\
 					    | MFLAG_OPT }
-#define MOPT_GROUPQUOTA	{ "groupquota",	0, MFLAG_SET | MFLAG_STRVAL \
+#define MOPT_GROUPQUOTA	{ "groupquota",	0, MFLAG_SET | MFLAG_STRVAL	\
 					    | MFLAG_OPT }
 #define MOPT_SOFTDEP	{ "softdep",	MNT_SOFTDEP, MFLAG_SET }
 

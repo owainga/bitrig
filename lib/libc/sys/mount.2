@@ -95,6 +95,12 @@ All I/O to the filesystem should be done asynchronously.
 Use soft dependencies.
 Applies to FFS filesystems only (see 'softdep' in
 .Xr mount 8 ) .
+.It Dv MNT_MAGICLINKS
+Expand special strings (beginning with
+.Dq @ )
+when traversing symbolic links.  See
+.Xr symlink 7
+for a list of supported strings.
 .El
 .Pp
 The flag

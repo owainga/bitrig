@@ -283,6 +283,7 @@ struct mount {
 
 /*
  * Mount flags.
+ * Flags may be out of order, for backward compatibility.
  *
  * Unmount uses MNT_FORCE flag.
  */
@@ -313,11 +314,12 @@ struct mount {
  * Extra post 4.4BSD-lite2 mount flags.
  */
 #define MNT_NOATIME	0x00008000	/* don't update access times on fs */
+#define	MNT_MAGICLINKS	0x00100000	/* interpret symlinks for magic names */
 
 /*
  * Mask of flags that are visible to statfs()
  */
-#define	MNT_VISFLAGMASK	0x0400ffff
+#define	MNT_VISFLAGMASK	0x0410ffff
 
 #define	MNT_BITS \
     "\010\001RDONLY\002SYNCHRONOUS\003NOEXEC\004NOSUID\005NODEV" \

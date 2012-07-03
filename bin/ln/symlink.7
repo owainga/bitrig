@@ -438,6 +438,106 @@ command does not support the
 or
 .Fl P
 options.
+
+.Sh MAGIC SYMLINKS
+Symlinks in file systems with the
+.Li MNT_MAGICLINKS
+flag set have
+.Dq magic
+patterns in symlinks expanded. Those patterns begin with
+.Dq @
+.Pq an at-sign ,
+and end at the end of the pathname component
+.Po
+i.e. at the next
+.Dq / ,
+or at the end of the symbolic link if there are no more slashes
+.Pc .
+.Pp
+To illustrate the pattern matching rules, assume that
+.Dq @foo
+is a valid magic string:
+.Pp
+.Bl -tag -width @foo/barxxxxx -offset indent -compact
+.It @foo
+would be matched
+.It @foo/bar
+would be matched
+.It bar@foo
+would be matched
+.It @foobar
+would not be matched
+.El
+.Pp
+Magic strings may also be delimited with the
+.Sq {
+and
+.Sq }
+characters, allowing for more complex patterns in symbolic links such as:
+.Bd -literal -offset indent
+@{var1}-@{var2}.@{var3}
+.Ed
+.Pp
+The following patterns are supported:
+.Bl -tag -width @machine_arch -offset indent
+.It @domainname
+Expands to the machine's domain name, as set by
+.Xr setdomainname 3 .
+.It @hostname
+Expands to the machine's host name, as set by
+.Xr sethostname 3 .
+.It @kernel_ident
+Expands to the name of the
+.Xr config 1
+file used to generate the running kernel.
+For example
+.Dv GENERIC .
+.It @machine
+Expands to the value of
+.Li MACHINE
+for the system
+.Po
+equivalent to the output of
+.Dq uname -m
+or
+.Xr sysctl 3
+.Dq hw.machine 
+.Pc .
+.It @machine_arch
+Expands to the value of
+.Li MACHINE_ARCH
+for the system. This is currently always the same as
+.Dq @machine .
+.It @osrelease
+Expands to the operating system release of the running kernel
+.Po
+equivalent to the output of
+.Dq uname -r
+or
+.Xr sysctl 3
+.Dq kern.osrelease
+.Pc .
+.It @ostype
+Expands to the operating system type of the running kernel
+.Po
+equivalent to the output of
+.Dq uname -s
+or
+.Xr sysctl 3
+.Dq kern.ostype
+.Pc .
+This will always be
+.Dq Bitrig
+on Bitrig systems.
+.It @ruid
+Expands to the real user-id of the process.
+.It @uid
+Expands to the effective user-id of the process.
+.It @rgid
+Expands to the real group-id of the process.
+.It @gid
+Expands to the effective group-id of the process.
+.El
 .Sh SEE ALSO
 .Xr chflags 1 ,
 .Xr chgrp 1 ,
@@ -453,6 +553,7 @@ options.
 .Xr tar 1 ,
 .Xr lchown 2 ,
 .Xr lstat 2 ,
+.Xr mount 2 ,
 .Xr readlink 2 ,
 .Xr rename 2 ,
 .Xr symlink 2 ,

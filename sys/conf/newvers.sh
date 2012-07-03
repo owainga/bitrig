@@ -79,6 +79,7 @@ const char version[] =
     "    ${branch}:${commit}\n";
 const char osbranch[] = "${branch}";
 const char oscommit[] = "${commit}";
+const char kernel_ident[] = "${id}";
 eof
 
 expr ${v} + 1 > version

@@ -72,13 +72,14 @@
  */
 extern int securelevel;		/* system security level */
 extern const char *panicstr;	/* panic message */
-extern const char version[];		/* system version */
+extern const char version[];	/* system version */
 extern const char copyright[];	/* system copyright */
 extern const char ostype[];
 extern const char osversion[];
 extern const char osrelease[];
 extern const char osbranch[];
 extern const char oscommit[];
+extern const char kernel_ident[];
 extern int cold;		/* cold start flag initialized in locore */
 
 extern int ncpus;		/* number of CPUs used */

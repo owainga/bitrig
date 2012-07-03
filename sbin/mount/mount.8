@@ -183,6 +183,12 @@ The same as
 .Fl f ;
 forces the revocation of write access when trying to downgrade
 a file system mount status from read-write to read-only.
+.It magiclinks
+Expand special strings (beginning with
+.Dq @ )
+when traversing symbolic links.  See
+.Xr symlink 7
+for a list of supported strings.
 .It noatime
 Do not update atime on files in the system unless the mtime or ctime
 is being changed as well.
