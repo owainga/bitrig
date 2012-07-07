@@ -313,11 +313,12 @@ struct mount {
  * Extra post 4.4BSD-lite2 mount flags.
  */
 #define MNT_NOATIME	0x00008000	/* don't update access times on fs */
+#define MNT_NOSYMFOLLOW	0x00200000	/* don't follow symlinks */
 
 /*
  * Mask of flags that are visible to statfs()
  */
-#define	MNT_VISFLAGMASK	0x0400ffff
+#define	MNT_VISFLAGMASK	0x0420ffff
 
 #define	MNT_BITS \
     "\010\001RDONLY\002SYNCHRONOUS\003NOEXEC\004NOSUID\005NODEV" \

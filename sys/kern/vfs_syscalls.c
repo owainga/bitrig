@@ -262,10 +262,10 @@ update:
 		mp->mnt_flag |= MNT_WANTRDWR;
 	mp->mnt_flag &=~ (MNT_NOSUID | MNT_NOEXEC | MNT_NODEV |
 	    MNT_SYNCHRONOUS | MNT_ASYNC | MNT_SOFTDEP | MNT_NOATIME |
-	    MNT_FORCE);
+	    MNT_FORCE | MNT_NOSYMFOLLOW);
 	mp->mnt_flag |= flags & (MNT_NOSUID | MNT_NOEXEC |
 	    MNT_NODEV | MNT_SYNCHRONOUS | MNT_ASYNC | MNT_SOFTDEP |
-	    MNT_NOATIME | MNT_FORCE);
+	    MNT_NOATIME | MNT_FORCE | MNT_NOSYMFOLLOW);
 	/*
 	 * Mount the filesystem.
 	 */

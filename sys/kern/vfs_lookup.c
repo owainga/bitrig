@@ -554,6 +554,18 @@ dirloop:
 	 * as we will need them again.
 	 */
 	if ((dp->v_type == VLNK) && (cnp->cn_flags & (FOLLOW|REQUIREDIR))) {
+		if (dp->v_mount == NULL) {
+			/*
+			 * If we don't know whether the directory was mounted with nosymfollow,
+			 * we can't follow safely.
+			 */
+			error = EBADF;
+			goto bad2;
+		}
+		if (dp->v_mount->mnt_flag & MNT_NOSYMFOLLOW) {
+			error = EACCES;
+			goto bad2;
+		}
 		ndp->ni_pathlen += slashes;
 		ndp->ni_next -= slashes;
 		cnp->cn_flags |= ISSYMLINK;

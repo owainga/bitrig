@@ -88,6 +88,7 @@ static struct opt {
 	{ MNT_NODEV,		0,	"nodev",		"nodev" },
 	{ MNT_NOEXEC,		0,	"noexec",		"noexec" },
 	{ MNT_NOSUID,		0,	"nosuid",		"nosuid" },
+	{ MNT_NOSYMFOLLOW,	0,	"nosymfollow", 		"nosymfollow" },
 	{ MNT_QUOTA,		0,	"with quotas",		"" },
 	{ MNT_RDONLY,		0,	"read-only",		"ro" },
 	{ MNT_ROOTFS,		1,	"root file system",	"" },
