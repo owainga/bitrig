@@ -108,8 +108,9 @@ extern struct nchstats nchstats;
 extern int nselcoll, fscale;
 extern struct disklist_head disklist;
 extern fixpt_t ccpu;
-extern  long numvnodes;
+extern long numvnodes;
 extern u_int mcllivelocks;
+extern int curtain;
 
 extern void nmbclust_update(void);
 
@@ -601,6 +602,12 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			pool_reclaim_all();
 		return (error);
 	}
+	case KERN_CURTAIN:
+		if (securelevel > 0)
+			return (sysctl_rdint(oldp, oldlenp, newp,
+			    curtain));
+		return (sysctl_int(oldp, oldlenp, newp, newlen,
+		    &curtain));
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -1260,6 +1267,26 @@ sysctl_file2(int *name, u_int namelen, char *where, size_t *sizep,
 	needed += elem_size;					\
 } while (0)
 
+	if (curtain && curproc->p_cred->p_ruid != 0) {
+		switch (op) {
+		case KERN_FILE_BYFILE:
+			op = KERN_FILE_BYUID;
+			arg = curproc->p_cred->p_ruid;
+			break;
+		case KERN_FILE_BYPID:
+			if (arg == -1) {
+				op = KERN_FILE_BYUID;
+				arg = curproc->p_cred->p_ruid;
+			} else if (arg != curproc->p_cred->p_ruid)
+				return (EPERM);
+			break;
+		case KERN_FILE_BYUID:
+			if (arg != curproc->p_cred->p_ruid)
+				return (EPERM);
+			break;
+		}
+	}
+
 	switch (op) {
 	case KERN_FILE_BYFILE:
 		if (arg != 0) {
@@ -1459,6 +1486,9 @@ again:
 			error = EINVAL;
 			goto err;
 		}
+
+		if (!cansee(curproc, p))
+			continue;
 
 		if ((p->p_flag & P_THREAD) == 0) {
 			if (buflen >= elem_size && elem_count > 0) {

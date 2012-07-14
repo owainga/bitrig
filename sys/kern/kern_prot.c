@@ -111,6 +111,8 @@ sys_getpgid(struct proc *curp, void *v, register_t *retval)
 		goto found;
 	if ((targpr = prfind(SCARG(uap, pid))) == NULL)
 		return (ESRCH);
+	if (!cansee(curp, targpr->ps_mainproc))
+		return (ESRCH);
 	if (targpr->ps_session != curp->p_p->ps_session)
 		return (EPERM);
 found:
@@ -278,6 +280,10 @@ sys_setpgid(struct proc *curp, void *v, register_t *retval)
 
 	if (pid != 0 && pid != curpr->ps_pid) {
 		if ((targpr = prfind(pid)) == 0 || !inferior(targpr, curpr)) {
+			error = ESRCH;
+			goto out;
+		}
+		if (!cansee(curp, targpr->ps_mainproc)) {
 			error = ESRCH;
 			goto out;
 		}

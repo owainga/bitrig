@@ -76,6 +76,8 @@ static void orphanpg(struct pgrp *);
 void pgrpdump(void);
 #endif
 
+int curtain = 0;
+
 /*
  * Initialize global process hashing structures.
  */
@@ -521,3 +523,10 @@ pgrpdump(void)
 	}
 }
 #endif /* DEBUG */
+
+int
+cansee(struct proc *p1, struct proc *p2)
+{
+	return !(curtain && p1->p_cred->p_ruid != 0
+	    && p1->p_cred->p_ruid != p2->p_cred->p_ruid);
+}

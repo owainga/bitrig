@@ -162,6 +162,9 @@ sys_ptrace(struct proc *p, void *v, register_t *retval)
 		}
 		break;
 	}
+	if (!cansee(curproc, t))
+		return (ESRCH);
+
 	tr = t->p_p;
 
 	if ((tr->ps_flags & PS_INEXEC) != 0)

@@ -184,7 +184,8 @@ struct ctlname {
 #define	KERN_NETLIVELOCKS	76	/* int: number of network livelocks */
 #define	KERN_POOL_DEBUG		77	/* int: enable pool_debug */
 #define	KERN_PROC_CWD		78      /* node: proc cwd */
-#define	KERN_MAXID		79	/* number of valid kern ids */
+#define	KERN_CURTAIN		79	/* int: see other uids */
+#define	KERN_MAXID		80	/* number of valid kern ids */
 
 #define	CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -266,6 +267,7 @@ struct ctlname {
 	{ "netlivelocks", CTLTYPE_INT }, \
 	{ "pool_debug", CTLTYPE_INT }, \
 	{ "proc_cwd", CTLTYPE_NODE }, \
+	{ "curtain", CTLTYPE_INT }, \
 }
 
 /*
@@ -529,13 +531,13 @@ do {									\
 	(kp)->p_nice = (pr)->ps_nice;					\
 									\
 	(kp)->p_xstat = (p)->p_xstat;					\
-	(kp)->p_acflag = (pr)->ps_acflag;					\
+	(kp)->p_acflag = (pr)->ps_acflag;				\
 									\
 	/* XXX depends on e_name being an array and not a pointer */	\
 	copy_str((kp)->p_emul, (char *)(p)->p_emul +			\
 	    offsetof(struct emul, e_name), sizeof((kp)->p_emul));	\
 	strlcpy((kp)->p_comm, (p)->p_comm, sizeof((kp)->p_comm));	\
-	strlcpy((kp)->p_login, (sess)->s_login,			\
+	strlcpy((kp)->p_login, (sess)->s_login,				\
 	    MIN(sizeof((kp)->p_login), sizeof((sess)->s_login)));	\
 									\
 	if ((sess)->s_ttyvp)						\
