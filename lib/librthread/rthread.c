@@ -70,6 +70,8 @@ struct pthread_attr _rthread_attr_default = {
 #endif
 };
 
+int _rthread_ncpu = 0;
+
 static int
 num_cpus()
 {
