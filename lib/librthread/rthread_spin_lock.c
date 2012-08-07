@@ -18,98 +18,65 @@
 #include <errno.h>
 #include <stdlib.h>
 
+#define _PTHREAD_SPIN_INLINE	/* Not inline. */
 #include <pthread.h>
 
 #include "rthread.h"
 
 int
-pthread_spin_init(pthread_spinlock_t *lock, int pshared)
+_pthread_spin_lock_blocked(pthread_spinlock_t *spl)
 {
-	pthread_spinlock_t l = NULL;
+	unsigned int	w, cur;
+	int		spin, maxspin;
 
-	if (lock == NULL)
-		return (EINVAL);
+	if (!spl)
+		return EINVAL;
 
-	if (pshared != PTHREAD_PROCESS_PRIVATE)
-		return (ENOTSUP);
+	/*
+	 * Acquire a ticket, we only synchronize on the end of the window,
+	 * any other global state is irrelevant at this point.
+	 */
+	w = atomic_fetch_add_explicit(&spl->pspl_wend, 1,
+	    memory_order_relaxed);
 
-	l = calloc(1, sizeof *l);
-	if (l == NULL)
-		return (ENOMEM);
+	/*
+	 * Try to acquire the lock immediately.
+	 * Memory_order_acquire: forces the thread that released the lock
+	 * to send us their cache.
+	 */
+	cur = w;
+	if (atomic_compare_exchange_weak_explicit(&spl->pspl_wstart, &cur, w,
+	    memory_order_acquire, memory_order_relaxed))
+		return 0;
 
-	l->lock = _SPINLOCK_UNLOCKED;
-	*lock = l;
-	return (0);
-}
+	/*
+	 * Set maxspin.
+	 * Default is 1024, unless this machine is not SMP capable.
+	 */
+	spin = maxspin = (_rthread_ncpu <= 1 ? 0 : 1024);
 
-int
-pthread_spin_destroy(pthread_spinlock_t *lock)
-{
-	if (lock == NULL || *lock == NULL)
-		return (EINVAL);
+	/*
+	 * Wait until the spinlock activates our ticket.
+	 *
+	 * If the lock queue exceeds the number of cpus, we yield
+	 * unconditionally.
+	 * If we are the next in line (and the above did not happen)
+	 * we spin unconditionally.
+	 * Otherwise, we mix spinning and yielding.
+	 */
+	while ((cur = atomic_load_explicit(&spl->pspl_wstart,
+	    memory_order_relaxed)) != w) {
+		if (w - cur > (unsigned)_rthread_ncpu ||
+		    (w - cur > 1 && spin == 0)) {
+			sched_yield();
+			spin = maxspin;
+		} else {
+			CPU_SPINWAIT;
+			spin--;
+		}
+	}
 
-	if ((*lock)->owner != NULL)
-		return (EBUSY);
-
-	free(*lock);
-	*lock = NULL;
-	return (0);
-}
-
-int
-pthread_spin_trylock(pthread_spinlock_t *lock)
-{
-	pthread_t self = pthread_self();
-	pthread_spinlock_t l;
-
-	if (lock == NULL || *lock == NULL)
-		return (EINVAL);
-
-	l = *lock;
-
-	if (l->owner == self)
-		return (EDEADLK);
-	if (_atomic_lock(&l->lock))
-		return (EBUSY);
-
-	l->owner = self;
-	return (0);
-}
-
-int
-pthread_spin_lock(pthread_spinlock_t *lock)
-{
-	pthread_t self = pthread_self();
-	pthread_spinlock_t l;
-
-	if (lock == NULL || *lock == NULL)
-		return (EINVAL);
-
-	l = *lock;
-
-	if (l->owner == self)
-		return (EDEADLK);
-
-	_spinlock(&l->lock);
-	l->owner = self;
-	return (0);
-}
-
-int
-pthread_spin_unlock(pthread_spinlock_t *lock)
-{
-	pthread_t self = pthread_self();
-	pthread_spinlock_t l;
-
-	if (lock == NULL || *lock == NULL)
-		return (EINVAL);
-
-	l = *lock;
-
-	if (l->owner != self)
-		return (EPERM);
-
-	l->owner = NULL;
-	_spinunlock(&l->lock);
-	return (0);
+	/* We now own the lock.  Force synchronization of globals. */
+	atomic_thread_fence(memory_order_acquire);
+	return 0;
 }

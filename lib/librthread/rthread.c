@@ -134,6 +134,9 @@ void _rthread_initlib(void)
 	/* use libc's errno for the main thread */
 	TCB_INIT(tcb, &_initial_thread, ___errno());
 	TCB_SET(tcb);
+
+	/* Globally store the # cpus. */
+	_rthread_ncpu = num_cpus();
 }
 
 int *

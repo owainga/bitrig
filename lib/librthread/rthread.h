@@ -135,11 +135,6 @@ struct pthread_barrierattr {
 	int pshared;
 };
 
-struct pthread_spinlock {
-	_spinlock_lock_t lock;
-	pthread_t owner;
-};
-
 struct pthread {
 	struct sem donesem;
 #if TLS_VARIANT == 1
@@ -181,6 +176,7 @@ struct pthread {
 	(((thread)->flags & (THREAD_CANCELED|THREAD_DYING)) == THREAD_CANCELED)
 
 
+extern int _rthread_ncpu;
 extern int _threads_ready;
 extern size_t _thread_pagesize;
 extern LIST_HEAD(listhead, pthread) _thread_list;

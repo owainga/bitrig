@@ -51,6 +51,8 @@
 #include <sys/signal.h>
 #include <limits.h>
 #include <sched.h>
+#include <errno.h>
+#include <stdatomic.h>
 
 /*
  * Run-time invariant values:
@@ -108,6 +110,10 @@ struct pthread_once;
 struct pthread_rwlock;
 struct pthread_rwlockattr;
 
+struct pthread_spinlock {
+	atomic_uint pspl_wstart, pspl_wend;
+};
+
 /*
  * Primitive system data type definitions required by P1003.1c.
  *
@@ -127,7 +133,7 @@ typedef struct	pthread_rwlock		*pthread_rwlock_t;
 typedef struct	pthread_rwlockattr	*pthread_rwlockattr_t;
 typedef struct	pthread_barrier		*pthread_barrier_t;
 typedef struct	pthread_barrierattr	*pthread_barrierattr_t;
-typedef struct	pthread_spinlock	*pthread_spinlock_t;
+typedef struct	pthread_spinlock	 pthread_spinlock_t;
 
 /*
  * Additional type definitions:
@@ -310,11 +316,86 @@ int		pthread_barrierattr_init(pthread_barrierattr_t *);
 int		pthread_barrierattr_destroy(pthread_barrierattr_t *);
 int		pthread_barrierattr_getpshared(pthread_barrierattr_t *, int *);
 int		pthread_barrierattr_setpshared(pthread_barrierattr_t *, int);
-int		pthread_spin_init(pthread_spinlock_t *, int);
-int		pthread_spin_destroy(pthread_spinlock_t *);
-int		pthread_spin_trylock(pthread_spinlock_t *);
-int		pthread_spin_lock(pthread_spinlock_t *);
-int		pthread_spin_unlock(pthread_spinlock_t *);
+int		_pthread_spin_lock_blocked(pthread_spinlock_t *);
+
+#ifndef _PTHREAD_SPIN_INLINE
+/* Defined by source spinlock .c file to compile non-inlined versions. */
+#define _PTHREAD_SPIN_INLINE	inline
+#endif
+
+_PTHREAD_SPIN_INLINE int
+pthread_spin_init(pthread_spinlock_t *spl, int pshared __unused)
+{
+	if (!spl)
+		return EINVAL;
+
+	atomic_init(&spl->pspl_wstart, 0);
+	atomic_init(&spl->pspl_wend, 0);
+	return 0;
+}
+
+_PTHREAD_SPIN_INLINE int
+pthread_spin_destroy(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/* Check that the spinlock is unlocked. */
+	if (atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed) !=
+	    atomic_load_explicit(&spl->pspl_wend, memory_order_relaxed))
+		return EBUSY;
+	return 0;
+}
+
+_PTHREAD_SPIN_INLINE int
+pthread_spin_trylock(pthread_spinlock_t *spl)
+{
+	unsigned int w;
+
+	if (!spl)
+		return EINVAL;
+
+	w = atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed);
+	if (!atomic_compare_exchange_strong_explicit(&spl->pspl_wend,
+	    &w, w + 1,
+	    memory_order_acquire, memory_order_relaxed))
+		return EBUSY;
+	return 0;
+}
+
+_PTHREAD_SPIN_INLINE int
+pthread_spin_lock(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/*
+	 * Try to use the trylock first.  Inline since it is only a few
+	 * instructions.
+	 * If the trylock fails, perform the spin_lock_blocked, which
+	 * will do all the spinning magic.
+	 */
+	if (pthread_spin_trylock(spl) == 0)
+		return 0;
+	return _pthread_spin_lock_blocked(spl);
+}
+
+_PTHREAD_SPIN_INLINE int
+pthread_spin_unlock(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/* Check that the spinlock is indeed locked. */
+	if (atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed) ==
+	    atomic_load_explicit(&spl->pspl_wend, memory_order_relaxed))
+		return EPERM;
+
+	/* Grant ticket to next in line. */
+	atomic_add_explicit(&spl->pspl_wstart, 1, memory_order_release);
+	return 0;
+}
+
 __END_DECLS
 
 #endif /* _PTHREAD_H_ */
