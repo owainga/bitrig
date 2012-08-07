@@ -111,7 +111,8 @@ struct pthread_rwlock;
 struct pthread_rwlockattr;
 
 struct pthread_spinlock {
-	atomic_uint pspl_wstart, pspl_wend;
+	atomic_uint	pspl_wstart, pspl_wend;
+	pid_t		pspl_owner;
 };
 
 /*
@@ -324,13 +325,17 @@ int		_pthread_spin_lock_blocked(pthread_spinlock_t *);
 #endif
 
 _PTHREAD_SPIN_INLINE int
-pthread_spin_init(pthread_spinlock_t *spl, int pshared __unused)
+pthread_spin_init(pthread_spinlock_t *spl, int pshared)
 {
 	if (!spl)
+		return EINVAL;
+	if (pshared != PTHREAD_PROCESS_PRIVATE &&
+	    pshared != PTHREAD_PROCESS_SHARED)
 		return EINVAL;
 
 	atomic_init(&spl->pspl_wstart, 0);
 	atomic_init(&spl->pspl_wend, 0);
+	spl->pspl_owner = 0;
 	return 0;
 }
 
@@ -351,6 +356,7 @@ _PTHREAD_SPIN_INLINE int
 pthread_spin_trylock(pthread_spinlock_t *spl)
 {
 	unsigned int w;
+	extern int getthrid();	/* syscall */
 
 	if (!spl)
 		return EINVAL;
@@ -360,6 +366,7 @@ pthread_spin_trylock(pthread_spinlock_t *spl)
 	    &w, w + 1,
 	    memory_order_acquire, memory_order_relaxed))
 		return EBUSY;
+	spl->pspl_owner = getthrid();
 	return 0;
 }
 
@@ -383,6 +390,8 @@ pthread_spin_lock(pthread_spinlock_t *spl)
 _PTHREAD_SPIN_INLINE int
 pthread_spin_unlock(pthread_spinlock_t *spl)
 {
+	extern int getthrid();	/* syscall */
+
 	if (!spl)
 		return EINVAL;
 
@@ -390,6 +399,10 @@ pthread_spin_unlock(pthread_spinlock_t *spl)
 	if (atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed) ==
 	    atomic_load_explicit(&spl->pspl_wend, memory_order_relaxed))
 		return EPERM;
+	/* Check that the lock is ours. */
+	if (spl->pspl_owner != getthrid())
+		return EPERM;
+	spl->pspl_owner = 0;
 
 	/* Grant ticket to next in line. */
 	atomic_fetch_add_explicit(&spl->pspl_wstart, 1, memory_order_release);

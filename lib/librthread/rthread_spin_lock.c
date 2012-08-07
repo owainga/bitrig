@@ -78,5 +78,7 @@ _pthread_spin_lock_blocked(pthread_spinlock_t *spl)
 
 	/* We now own the lock.  Force synchronization of globals. */
 	atomic_thread_fence(memory_order_acquire);
+
+	spl->pspl_owner = getthrid();
 	return 0;
 }
