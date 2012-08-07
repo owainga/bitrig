@@ -21,11 +21,11 @@ foo(void *arg)
 	pthread_spinlock_t *l = (pthread_spinlock_t*)arg;
 
 	/* First acquire the lock once, to validate it actually works. */
-	pthread_spin_lock(l);
+	CHECKr(pthread_spin_lock(l));
 	printf("foo(): Acquired spinlock\n");
-	pthread_spin_unlock(l);
+	CHECKr(pthread_spin_unlock(l));
 
-	for (loop = 0; loop < 1000; loop++) {
+	for (loop = 0; loop < 100; loop++) {
 		rc = pthread_spin_trylock(l);
 		if (rc != 0 && rc != EBUSY) {
 			PANIC("pthread_trylock returned %d", rc);
