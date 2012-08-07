@@ -392,7 +392,7 @@ pthread_spin_unlock(pthread_spinlock_t *spl)
 		return EPERM;
 
 	/* Grant ticket to next in line. */
-	atomic_add_explicit(&spl->pspl_wstart, 1, memory_order_release);
+	atomic_fetch_add_explicit(&spl->pspl_wstart, 1, memory_order_release);
 	return 0;
 }
 
