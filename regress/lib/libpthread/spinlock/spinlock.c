@@ -1,5 +1,6 @@
 /*	$OpenBSD: spinlock.c,v 1.1 2012/05/03 09:07:17 pirofti Exp $	*/
 /* Paul Irofti <pirofti@openbsd.org>, 2012. Public Domain. */
+/* Ariane van der Steldt <ariane@stack.nl>, 2012. Public Domain. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +47,14 @@ int main()
 	pthread_t thr[10];
 	pthread_spinlock_t l, *pl;
 	int status;
+	extern int _rthread_ncpu;
 
+	printf("Spinlock test, using 10 threads/processes on %d cpus.\n",
+	    _rthread_ncpu);
+
+	/*
+	 * Test process private spinlocks.
+	 */
 	CHECKr(pthread_spin_init(&l, PTHREAD_PROCESS_PRIVATE));
 	for (i = 0; i < 10; i++) {
 		printf("Thread %d started\n", i);
