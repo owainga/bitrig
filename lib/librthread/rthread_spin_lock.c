@@ -18,7 +18,6 @@
 #include <errno.h>
 #include <stdlib.h>
 
-#define _PTHREAD_SPIN_INLINE	/* Not inline. */
 #include <pthread.h>
 
 #include "rthread.h"
@@ -80,5 +79,87 @@ _pthread_spin_lock_blocked(pthread_spinlock_t *spl)
 	atomic_thread_fence(memory_order_acquire);
 
 	spl->pspl_owner = getthrid();
+	return 0;
+}
+
+int
+pthread_spin_init(pthread_spinlock_t *spl, int pshared)
+{
+	if (!spl)
+		return EINVAL;
+	if (pshared != PTHREAD_PROCESS_PRIVATE &&
+	    pshared != PTHREAD_PROCESS_SHARED)
+		return EINVAL;
+
+	atomic_init(&spl->pspl_wstart, 0);
+	atomic_init(&spl->pspl_wend, 0);
+	spl->pspl_owner = 0;
+	return 0;
+}
+
+int
+pthread_spin_destroy(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/* Check that the spinlock is unlocked. */
+	if (atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed) !=
+	    atomic_load_explicit(&spl->pspl_wend, memory_order_relaxed))
+		return EBUSY;
+	return 0;
+}
+
+int
+pthread_spin_trylock(pthread_spinlock_t *spl)
+{
+	unsigned int w;
+
+	if (!spl)
+		return EINVAL;
+
+	w = atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed);
+	if (!atomic_compare_exchange_strong_explicit(&spl->pspl_wend,
+	    &w, w + 1,
+	    memory_order_acquire, memory_order_relaxed))
+		return EBUSY;
+	spl->pspl_owner = getthrid();
+	return 0;
+}
+
+int
+pthread_spin_lock(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/*
+	 * Try to use the trylock first.  Inline since it is only a few
+	 * instructions.
+	 * If the trylock fails, perform the spin_lock_blocked, which
+	 * will do all the spinning magic.
+	 */
+	if (pthread_spin_trylock(spl) == 0)
+		return 0;
+	return _pthread_spin_lock_blocked(spl);
+}
+
+int
+pthread_spin_unlock(pthread_spinlock_t *spl)
+{
+	if (!spl)
+		return EINVAL;
+
+	/* Check that the spinlock is indeed locked. */
+	if (atomic_load_explicit(&spl->pspl_wstart, memory_order_relaxed) ==
+	    atomic_load_explicit(&spl->pspl_wend, memory_order_relaxed))
+		return EPERM;
+	/* Check that the lock is ours. */
+	if (spl->pspl_owner != getthrid())
+		return EPERM;
+	spl->pspl_owner = 0;
+
+	/* Grant ticket to next in line. */
+	atomic_fetch_add_explicit(&spl->pspl_wstart, 1, memory_order_release);
 	return 0;
 }
