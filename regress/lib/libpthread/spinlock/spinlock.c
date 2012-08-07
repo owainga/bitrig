@@ -56,10 +56,12 @@ int main()
 	 * Test process private spinlocks.
 	 */
 	CHECKr(pthread_spin_init(&l, PTHREAD_PROCESS_PRIVATE));
+	CHECKr(pthread_spin_lock(&l));
 	for (i = 0; i < 10; i++) {
 		printf("Thread %d started\n", i);
 		CHECKr(pthread_create(&thr[i], NULL, foo, (void *)&l));
 	}
+	CHECKr(pthread_spin_unlock(&l));
 	for (i = 0; i < 10; i++) {
 		CHECKr(pthread_join(thr[i], NULL));
 	}
@@ -88,9 +90,25 @@ int main()
 	}
 	CHECKr(pthread_spin_unlock(pl));
 	for (i = 0; i < 10; i++) {
-		_CHECK(waitpid(children[i], &status, 0), != -1,
-		    strerror(errno));
-		CHECKr(WEXITSTATUS(status));
+		int wpid;
+
+		while ((wpid = waitpid(children[i], &status, 0)) == -1) {
+			if (errno == EINTR)
+				continue;
+			perror("waitpid");
+		}
+
+		if (WIFSIGNALED(status)) {
+			PANIC("child %d died due to signal %d%s",
+			    children[i], WTERMSIG(signal),
+			    (WCOREDUMP(status) ? " core dumped" : ""));
+		}
+		if (!WIFEXITED(status))
+			PANIC("waitpid returned for non-exited child");
+		if (WEXITSTATUS(status) != 0) {
+			PANIC("child %d exited with return %d",
+			    children[i], WEXITSTATUS(status));
+		}
 	}
 	CHECKr(pthread_spin_destroy(pl));
 
