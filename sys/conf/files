@@ -665,6 +665,7 @@ file kern/subr_disk.c
 file kern/subr_evcount.c
 file kern/subr_extent.c
 file kern/subr_hibernate.c		hibernate
+file kern/subr_ll.c
 file kern/subr_log.c
 file kern/subr_pool.c
 file kern/dma_alloc.c

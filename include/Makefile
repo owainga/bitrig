@@ -31,7 +31,7 @@ FILES+= ieeefp.h
 .endif
 
 MFILES=	frame.h
-LFILES=	fcntl.h syslog.h termios.h stdarg.h stdatomic.h stdint.h varargs.h
+LFILES=	fcntl.h ll.h syslog.h termios.h stdarg.h stdatomic.h stdint.h varargs.h
 
 DIRS=	arpa protocols rpc rpcsvc
 LDIRS=	altq crypto ddb dev isofs msdosfs net netinet netinet6 \
