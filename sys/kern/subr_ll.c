@@ -16,7 +16,6 @@
 
 
 /* Upstream repository: git://github.com/nahratzah/ll.git */
-#include <sys/ll.h>
 #ifdef _KERNEL
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -28,6 +27,8 @@
 #include <stdint.h>
 #define LL_ASSERT assert
 #endif
+
+#include <sys/ll.h>
 
 
 /*
