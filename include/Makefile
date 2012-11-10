@@ -19,7 +19,7 @@ FILES=	a.out.h ar.h assert.h bitstring.h blf.h bm.h bsd_auth.h \
 	ohash.h paths.h poll.h pwd.h ranlib.h re_comp.h \
 	readpassphrase.h regex.h resolv.h rmd160.h search.h setjmp.h \
 	sgtty.h sha1.h sha2.h signal.h sndio.h spawn.h stab.h \
-	stdbool.h stddef.h stdio.h stdlib.h \
+	stdatomic.h stdbool.h stddef.h stdio.h stdlib.h \
 	string.h strings.h struct.h sysexits.h tar.h tgmath.h \
 	time.h ttyent.h tzfile.h unistd.h utime.h utmp.h vis.h \
 	wchar.h wctype.h
@@ -31,7 +31,7 @@ FILES+= ieeefp.h
 .endif
 
 MFILES=	frame.h
-LFILES=	fcntl.h syslog.h termios.h stdarg.h stdint.h varargs.h
+LFILES=	fcntl.h syslog.h termios.h stdarg.h stdatomic.h stdint.h varargs.h
 
 DIRS=	arpa protocols rpc rpcsvc
 LDIRS=	altq crypto ddb dev isofs msdosfs net netinet netinet6 \
