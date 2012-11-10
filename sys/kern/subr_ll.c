@@ -20,7 +20,7 @@
 #ifdef _KERNEL
 #include <sys/param.h>
 #include <sys/systm.h>
-#define LL_ASSERT KASSERT
+#define LL_ASSERT KDASSERT
 #define uintptr_t __uintptr_t
 #else
 /* Userspace code. */
