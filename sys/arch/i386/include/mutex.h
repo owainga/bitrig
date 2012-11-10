@@ -27,31 +27,6 @@
 #ifndef _MACHINE_MUTEX_H_
 #define _MACHINE_MUTEX_H_
 
-/*
- * XXX - we don't really need the mtx_lock field, we can use mtx_oldipl
- *	 as the lock to save some space.
- */
-struct mutex {
-	__volatile int mtx_lock;
-	int mtx_wantipl;
-	int mtx_oldipl;
-	void *mtx_owner;
-};
-
-#define MUTEX_INITIALIZER(IPL) { 0, (IPL), 0, NULL }
-
-#define MUTEX_ASSERT_LOCKED(mtx) do {					\
-	if ((mtx)->mtx_lock != 1 ||					\
-	    (mtx)->mtx_owner != curcpu())				\
-		panic("mutex %p not held in %s", (mtx), __func__);	\
-} while (0)
-
-#define MUTEX_ASSERT_UNLOCKED(mtx) do {					\
-	if ((mtx)->mtx_lock == 1 &&					\
-	    (mtx)->mtx_owner == curcpu())				\
-		panic("mutex %p held in %s", (mtx), __func__);		\
-} while (0)
-
-#define MUTEX_OLDIPL(mtx)	(mtx)->mtx_oldipl
+/* Header obsolete. */
 
 #endif

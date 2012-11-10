@@ -27,24 +27,6 @@
 #ifndef _MACHINE_MUTEX_H_
 #define _MACHINE_MUTEX_H_
 
-struct mutex {
-	int mtx_wantipl;
-	int mtx_oldipl;
-	__volatile void *mtx_owner;
-};
-
-#define MUTEX_INITIALIZER(ipl) { (ipl), 0, NULL }
-
-#define MUTEX_ASSERT_LOCKED(mtx) do {					\
-	if ((mtx)->mtx_owner != curcpu())				\
-		panic("mutex %p not held in %s", (mtx), __func__);	\
-} while (0)
-
-#define MUTEX_ASSERT_UNLOCKED(mtx) do {					\
-	if ((mtx)->mtx_owner == curcpu())				\
-		panic("mutex %p held in %s", (mtx), __func__);		\
-} while (0)
-
-#define MUTEX_OLDIPL(mtx)	(mtx)->mtx_oldipl
+/* Header obsolete. */
 
 #endif
