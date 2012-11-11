@@ -104,12 +104,18 @@ zzz_transfer(struct sleepyhead *sh_src, struct sleepyhead *sh_dst, int n)
 			expect = sh_src;
 			if (atomic_compare_exchange_strong_explicit(&s->zzz_sh,
 			    &expect, sh_dst,
-			    memory_order_relaxed, memory_order_relaxed))
+			    memory_order_release, memory_order_relaxed))
 				break;	/* GUARD */
 
-			/* Cannot change queue if s. */
+			/*
+			 * Cannot change queue if s has woken up.
+			 * We cannot unlink either, since an unlinked entry
+			 * indicates a wakeup.
+			 * Simply re-insert, to let the zzz() function not
+			 * think this is a wakeup.
+			 */
 			KDASSERT(expect == NULL);
-			LL_UNLINK_WAIT(sleepyhead, sh_src, s);
+			LL_UNLINK_WAIT_INSERT_TAIL(sleepyhead, sh_src, s);
 			LL_RELEASE(sleepyhead, sh_src, s);
 		}
 		if (!s)
@@ -165,16 +171,26 @@ zzz(struct sleepyhead *sh, int priority, int timo,
 	/* Actual sleep. */
 	sleep_finish(&sls, 1);
 
-	/* Figure out which queue we awoke on. */
-	sh = atomic_exchange_explicit(&s.zzz_sh, NULL, memory_order_relaxed);
+	/*
+	 * Figure out which queue we awoke on.
+	 * Assigning NULL to the variable makes us immune to transfers.
+	 */
+	sh = atomic_exchange_explicit(&s.zzz_sh, NULL, memory_order_consume);
 	if (sh_wakeup)
 		*sh_wakeup = sh;
+	KASSERT(sh != NULL);
 
-	/* Unlink from sleepyhead. */
+	/*
+	 * Unlink from sleepyhead.
+	 *
+	 * If the unlink fails, we have a wakeup pending.
+	 * We must never lose a wakeup, so if we return with an error,
+	 * we need to perform an additional wakeup.
+	 */
 	LL_REF(sleepyhead, sh, &s);
 	unlink = (LL_UNLINK_ROBUST(sleepyhead, sh, &s) != NULL);
 	/*
-	 * Technically, we should release after unlink,
+	 * Technically, we should release after unlink if it fails,
 	 * but unlink_robust is special, since it is always the final
 	 * unlink that an object can have and we are guaranteed to hold
 	 * the only reference.
@@ -190,22 +206,28 @@ zzz(struct sleepyhead *sh, int priority, int timo,
 	 * Signals take precedence over everything.
 	 * Predicate failure takes precedence over the rest.
 	 *
-	 * If unlink succeeded, we were woken up, otherwise we were not.
+	 * If unlink succeeded, we were not woken up, otherwise we were.
 	 * If an unlink succeeded while a timeout also ticked, the succesful
 	 * wakeup takes precedence.
 	 */
-	if (error != 0)
+	if (error != 0) {
+		if (!unlink)
+			zzz_wakeup(s.zzz_sh);	/* Don't lose wakeups. */
 		return error;
-	if (pred_error != 0)
+	}
+	if (pred_error != 0) {
+		/* pred_error set -> never linked in the first place. */
+		KASSERT(!unlink);
 		return pred_error;
+	}
 	if (!unlink)
-		return 0;
+		return 0;	/* Wakeup is now consumed. */
 	if (time_err != 0)
 		return time_err;
 
 	/* UNREACHABLE */
 	panic("zzz: completed without errors, but was not woken up "
-	    "(did someone call wakeup?)");
+	    "(did someone call wakeup instead of zzz_wakeup?)");
 }
 
 /* Test if the sleepyhead queue is empty. */
