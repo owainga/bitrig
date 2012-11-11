@@ -38,6 +38,10 @@ struct sleepyhead {
 typedef int (*sleepyhead_predicate)(void *);
 
 
+#define SLEEPYHEAD_INITIALIZER(sh, wmsg)				\
+	{ LL_HEAD_INITIALIZER__HEAD((sh).ll_head), (wmsg) }
+
+void	 zzz_init(struct sleepyhead *, const char *);
 int	 zzz_wakeup_n(struct sleepyhead *, int);
 void	 zzz_wakeup(struct sleepyhead *);
 int	 zzz_transfer(struct sleepyhead *, struct sleepyhead *, int);

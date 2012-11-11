@@ -32,6 +32,13 @@ struct snore {
 /* Inlined access functions. */
 LL_GENERATE(sleepyhead, snore, zzz_link);
 
+void
+zzz_init(struct sleepyhead *sh, const char *wmsg)
+{
+	LL_INIT(sh);
+	sh->sh_wmesg = wmsg;
+}
+
 /*
  * Wakeup a number of sleeping procs on the list.
  * Returns the number of awoken procs.
