@@ -20,6 +20,7 @@
 #include <sys/stdatomic.h>
 #include <sys/_null.h>
 #include <sys/types.h>
+#define uintptr_t __uintptr_t
 #else
 #include <stdatomic.h>
 #include <stddef.h>

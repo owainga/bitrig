@@ -387,7 +387,6 @@ wakeup_n(const volatile void *ident, int n)
 void
 wakeup_proc(struct proc *p)
 {
-	struct proc *p = arg;
 	int s;
 
 	SCHED_LOCK(s);

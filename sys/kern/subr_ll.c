@@ -20,7 +20,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #define LL_ASSERT KDASSERT
-#define uintptr_t __uintptr_t
 #else
 /* Userspace code. */
 #include <assert.h>
