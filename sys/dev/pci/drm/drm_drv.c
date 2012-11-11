@@ -866,10 +866,10 @@ drmmmap(dev_t kdev, off_t offset, int prot)
 		struct drm_device_dma *dma = dev->dma;
 		paddr_t	phys = -1;
 
-		rw_enter_write(&dma->dma_lock);
+		smtx_enter(&dma->dma_lock, 0, 0);
 		if (dma->pagelist != NULL)
 			phys = dma->pagelist[offset >> PAGE_SHIFT];
-		rw_exit_write(&dma->dma_lock);
+		smtx_leave(&dma->dma_lock);
 
 		return (phys);
 	}

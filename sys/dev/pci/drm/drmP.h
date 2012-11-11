@@ -50,6 +50,7 @@
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/mutex.h>
+#include <sys/smtx.h>
 #include <sys/fcntl.h>
 #include <sys/filio.h>
 #include <sys/signalvar.h>
@@ -274,7 +275,7 @@ struct drm_lock_data {
  * not concurrently accessed, so no locking is needed.
  */
 struct drm_device_dma {
-	struct rwlock	 	 dma_lock;
+	struct smtx		 dma_lock;
 	struct drm_buf_entry	 bufs[DRM_MAX_ORDER+1];
 	struct drm_buf		**buflist;	/* Vector of pointers info bufs*/
 	unsigned long		*pagelist;

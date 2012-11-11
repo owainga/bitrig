@@ -380,7 +380,7 @@ drm_dma_setup(struct drm_device *dev)
 	if (dev->dma == NULL)
 		return (ENOMEM);
 
-	rw_init(&dev->dma->dma_lock, "drmdma");
+	smtx_init(&dev->dma->dma_lock, "drmdma", PUSER);
 
 	return (0);
 }
@@ -849,24 +849,26 @@ drm_addbufs(struct drm_device *dev, struct drm_buf_desc *request)
 {
 	struct drm_device_dma	*dma = dev->dma;
 	int			 order, ret;
+	int			 smtx_rv;
 
 	if (request->count < 0 || request->count > 4096)
 		return (EINVAL);
-	
+
 	order = drm_order(request->size);
 	if (order < DRM_MIN_ORDER || order > DRM_MAX_ORDER)
 		return (EINVAL);
 
-	rw_enter_write(&dma->dma_lock);
+	smtx_rv = smtx_enter(&dma->dma_lock, 0, 0);
+	KASSERT(smtx_rv == 0);
 
 	/* No more allocations after first buffer-using ioctl. */
 	if (dma->buf_use != 0) {
-		rw_exit_write(&dma->dma_lock);
+		smtx_leave(&dma->dma_lock);
 		return (EBUSY);
 	}
 	/* No more than one allocation per order */
 	if (dma->bufs[order].buf_count != 0) {
-		rw_exit_write(&dma->dma_lock);
+		smtx_leave(&dma->dma_lock);
 		return (ENOMEM);
 	}
 
@@ -877,7 +879,7 @@ drm_addbufs(struct drm_device *dev, struct drm_buf_desc *request)
 	else
 		ret = drm_addbufs_pci(dev, request);
 
-	rw_exit_write(&dma->dma_lock);
+	smtx_leave(&dma->dma_lock);
 
 	return (ret);
 }
@@ -889,10 +891,12 @@ drm_freebufs(struct drm_device *dev, void *data, struct drm_file *file_priv)
 	struct drm_buf_free	*request = data;
 	struct drm_buf		*buf;
 	int			 i, idx, retcode = 0;
+	int			 smtx_rv;
 
 	DRM_DEBUG("%d\n", request->count);
-	
-	rw_enter_write(&dma->dma_lock);
+
+	smtx_rv = smtx_enter(&dma->dma_lock, 0, 0);
+	KASSERT(smtx_rv == 0);
 	for (i = 0; i < request->count; i++) {
 		if (DRM_COPY_FROM_USER(&idx, &request->list[i], sizeof(idx))) {
 			retcode = EFAULT;
@@ -913,7 +917,7 @@ drm_freebufs(struct drm_device *dev, void *data, struct drm_file *file_priv)
 		}
 		drm_free_buffer(dev, buf);
 	}
-	rw_exit_write(&dma->dma_lock);
+	smtx_leave(&dma->dma_lock);
 
 	return retcode;
 }
@@ -929,13 +933,15 @@ drm_mapbufs(struct drm_device *dev, void *data, struct drm_file *file_priv)
 	vsize_t			 size;
 	const int		 zero = 0;
 	int			 i, retcode = 0;
+	int			 smtx_rv;
 
 	if (!vfinddev(file_priv->kdev, VCHR, &vn))
 		return EINVAL;
 
-	rw_enter_write(&dma->dma_lock);
+	smtx_rv = smtx_enter(&dma->dma_lock, 0, 0);
+	KASSERT(smtx_rv == 0);
 	dev->dma->buf_use++;	/* Can't allocate more after this call */
-	rw_exit_write(&dma->dma_lock);
+	smtx_leave(&dma->dma_lock);
 
 	if (request->count < dma->buf_count)
 		goto done;

@@ -40,6 +40,7 @@
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/rwlock.h>
+#include <sys/smtx.h>
 
 #include <uvm/uvm.h>
 
@@ -117,7 +118,7 @@ int buckstring_init = 0;
 #if defined(KMEMSTATS) || defined(DIAGNOSTIC) || defined(FFS_SOFTUPDATES)
 char *memname[] = INITKMEMNAMES;
 char *memall = NULL;
-struct rwlock sysctl_kmemlock = RWLOCK_INITIALIZER("sysctlklk");
+struct smtx sysctl_kmemlock = SMTX_INITIALIZER(sysctl_kmemlock, "sysctlklk", PUSER);
 #endif
 
 #ifdef DIAGNOSTIC
@@ -608,7 +609,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen, struct proc *p)
 {
 	struct kmembuckets kb;
-	int i, siz;
+	int i = 0, siz;
 
 	if (namelen != 2 && name[0] != KERN_MALLOC_BUCKETS &&
 	    name[0] != KERN_MALLOC_KMEMNAMES)
@@ -650,7 +651,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		if (memall == NULL) {
 			int totlen;
 
-			i = rw_enter(&sysctl_kmemlock, RW_WRITE|RW_INTR);
+			i = smtx_enter(&sysctl_kmemlock, RW_INTR);
 			if (i)
 				return (i);
 
@@ -676,7 +677,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			for (i = 0; i < totlen; i++)
 				if (memall[i] == ' ')
 					memall[i] = '_';
-			rw_exit_write(&sysctl_kmemlock);
+			smtx_leave(&sysctl_kmemlock);
 		}
 		return (sysctl_rdstring(oldp, oldlenp, newp, memall));
 #else
