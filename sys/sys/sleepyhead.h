@@ -47,5 +47,6 @@ void	 zzz_wakeup(struct sleepyhead *);
 int	 zzz_transfer(struct sleepyhead *, struct sleepyhead *, int);
 int	 zzz(struct sleepyhead *, int, int, sleepyhead_predicate, void *,
 	    struct sleepyhead **);
+int	 zzz_empty(struct sleepyhead *);
 
 #endif /* _SYS_SLEEPYHEAD_H */

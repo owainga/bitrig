@@ -207,3 +207,10 @@ zzz(struct sleepyhead *sh, int priority, int timo,
 	panic("zzz: completed without errors, but was not woken up "
 	    "(did someone call wakeup?)");
 }
+
+/* Test if the sleepyhead queue is empty. */
+int
+zzz_empty(struct sleepyhead *sh)
+{
+	return LL_EMPTY(sleepyhead, sh);
+}
