@@ -258,6 +258,7 @@ void	sleep_queue_init(void);
 struct mutex;
 void    wakeup_n(const volatile void *, int);
 void    wakeup(const volatile void *);
+void    wakeup_proc(struct proc *);
 #define wakeup_one(c) wakeup_n((c), 1)
 int	tsleep(const volatile void *, int, const char *, int);
 int	msleep(const volatile void *, struct mutex *, int,  const char*, int);

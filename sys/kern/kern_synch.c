@@ -380,6 +380,27 @@ wakeup_n(const volatile void *ident, int n)
 }
 
 /*
+ * Make a specific process runnable.
+ *
+ * (This is basically endtsleep, without the P_TIMEOUT flag assignment.)
+ */
+void
+wakeup_proc(struct proc *p)
+{
+	struct proc *p = arg;
+	int s;
+
+	SCHED_LOCK(s);
+	if (p->p_wchan) {
+		if (p->p_stat == SSLEEP)
+			setrunnable(p);
+		else
+			unsleep(p);
+	}
+	SCHED_UNLOCK(s);
+}
+
+/*
  * Make all processes sleeping on the specified identifier runnable.
  */
 void
