@@ -5032,7 +5032,7 @@ uvm_map_setup_md(struct vm_map *map)
 	if (min < VMMAP_MIN_ADDR)
 		min = VMMAP_MIN_ADDR;
 
-#if 0	/* Cool stuff, not yet */
+#if 1	/* Cool stuff, not yet */
 	/* Hinted allocations. */
 	map->uaddr_any[1] = uaddr_hint_create(MAX(min, VMMAP_MIN_ADDR), max,
 	    1024 * 1024 * 1024);
@@ -5065,7 +5065,7 @@ uvm_map_setup_md(struct vm_map *map)
 	if (min < VMMAP_MIN_ADDR)
 		min = VMMAP_MIN_ADDR;
 
-#if 0	/* Cool stuff, not yet */
+#if 1	/* Cool stuff, not yet */
 	/* Hinted allocations above 4GB */
 	map->uaddr_any[0] =
 	    uaddr_hint_create(0x100000000ULL, max, 1024 * 1024 * 1024);
@@ -5100,7 +5100,7 @@ uvm_map_setup_md(struct vm_map *map)
 	if (min < VMMAP_MIN_ADDR)
 		min = VMMAP_MIN_ADDR;
 
-#if 0	/* Cool stuff, not yet */
+#if 1	/* Cool stuff, not yet */
 	/* Hinted allocations. */
 	map->uaddr_any[1] = uaddr_hint_create(MAX(min, VMMAP_MIN_ADDR), max,
 	    1024 * 1024 * 1024);
