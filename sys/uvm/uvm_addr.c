@@ -1163,13 +1163,15 @@ uaddr_pivot_newpivot(struct vm_map *map, struct uaddr_pivot_state *uaddr,
 		*addr_out = found_minaddr;
 	else {
 		KASSERT(align >= PAGE_SIZE && (align & (align - 1)) == 0);
-		arc4_arg = found_maxaddr - found_minaddr;
+		arc4_arg = (found_maxaddr - found_minaddr) >> PAGE_SHIFT;
 		if (arc4_arg > 0xffffffff) {
 			*addr_out = found_minaddr +
-			    (arc4random() & (align - 1));
+			    ((arc4random() << PAGE_SHIFT) &
+			     ~(vaddr_t)(align - 1));
 		} else {
 			*addr_out = found_minaddr +
-			    (arc4random_uniform(arc4_arg) & (align - 1));
+			    ((arc4random_uniform(arc4_arg) << PAGE_SHIFT) &
+			     ~(vaddr_t)(align - 1));
 		}
 	}
 	/* Address was found in this entry. */
