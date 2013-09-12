@@ -56,6 +56,11 @@ device	acpimadt
 attach	acpimadt at acpi
 file	dev/acpi/acpimadt.c		acpimadt
 
+# Device Remapping Reporting Table (for vt-d)
+device	acpidmar
+attach	acpidmar at acpi
+file	dev/acpi/acpidmar.c		acpidmar
+
 # Memory Mapped Configuration Space Address Description Table
 device	acpimcfg
 attach	acpimcfg at acpi

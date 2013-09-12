@@ -1,0 +1,38 @@
+.\" Copyright (c) 2013 Owain G. Ainsworth <oga@nicotinebsd.org>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate: September 12 2013 $
+.Dt ACPIDMAR 4
+.Os
+.Sh NAME
+.Nm acpidmar
+.Nd ACPI DMA Remapping configuration
+.Sh SYNOPSIS
+.Cd "acpidmar* at acpi?"
+.Sh DESCRIPTION
+The
+.Nm
+driver detects and configures the presence of Intel vt-d DMA remapping
+hardware extracted from the ACPI DMAR table.
+.Sh SEE ALSO
+.Xr acpi 4 ,
+.Xr intro 4 ,
+.Xr bus_dma 9 ,
+.Sh AUTHORS
+.An -nosplit
+The
+.Nm
+driver was written by
+P
+.An Owain G. Ainsworth Aq Mt oga@nicotinebsd.org .

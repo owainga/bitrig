@@ -432,6 +432,19 @@ struct acpi_facs {
 /*
  * Intel ACPI DMA Remapping Entries
  */
+
+/* main DMAR table entry */
+struct acpi_dmar {
+	struct acpi_table_header	hdr;
+#define DMAR_SIG	"DMAR"
+	uint8_t				addrwidth;
+	uint8_t				flags;
+#define DMAR_INTR_REMAP		(1<<0)
+#define DMAR_X2APIC_OPT_OUT 	(1<<1)
+	uint8_t				reserved[10];
+	/* struct acpidmar_entry[]; */
+} __packed;
+
 struct acpidmar_devpath {
 	uint8_t		device;
 	uint8_t		function;
@@ -447,6 +460,7 @@ struct acpidmar_devscope {
 	uint16_t	reserved;
 	uint8_t		enumid;
 	uint8_t		bus;
+	/* struct acpidma_devpath[] list of dev function pairs */
 } __packed;
 
 /* DMA Remapping Hardware Unit */
@@ -484,6 +498,16 @@ struct acpidmar_atsr {
 	/* struct acpidmar_devscope[]; */
 } __packed;
 
+/* Remapping Hardware Static Affinity Structure */
+struct acpidmar_rhsa {
+	uint16_t	type;
+	uint16_t	length;
+
+	uint8_t		reserved[4];
+	uint64_t	base_addr;
+	uint32_t	proximity_domain;
+} __packed;
+
 union acpidmar_entry {
 	struct {
 		uint16_t	type;
@@ -496,15 +520,7 @@ union acpidmar_entry {
 	struct acpidmar_drhd	drhd;
 	struct acpidmar_rmrr	rmrr;
 	struct acpidmar_atsr	atsr;
-} __packed;
-
-struct acpi_dmar {
-	struct acpi_table_header	hdr;
-#define DMAR_SIG	"DMAR"
-	uint8_t		haw;
-	uint8_t		flags;
-	uint8_t		reserved[10];
-	/* struct acpidmar_entry[]; */
+	struct acpidmar_rhsa	rhsa;
 } __packed;
 
 /*
@@ -629,7 +645,6 @@ struct acpi_ivrs {
 #define IVRS_PASIZE_MASK	0x7F
 	uint8_t			reserved[8];
 } __packed;
-
 
 #define ACPI_FREQUENCY	3579545		/* Per ACPI spec */
 

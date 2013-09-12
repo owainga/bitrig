@@ -46,6 +46,7 @@ acpiec*		at acpi?
 acpiprt*	at acpi?
 acpitz*		at acpi?
 acpimadt0	at acpi?
+acpidmar0	at acpi?
 acpimcfg*	at acpi?
 acpiasus*	at acpi?
 acpisony*	at acpi?
