@@ -668,6 +668,12 @@ pcireg_t acpi_pci_min_powerstate(pci_chipset_tag_t, pcitag_t);
 void acpi_pci_set_powerstate(pci_chipset_tag_t, pcitag_t, int, int);
 #endif
 
+int
+pci_probe_device_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
+{
+	return (0);
+}
+
 void
 pci_dev_postattach(struct device *dev, struct pci_attach_args *pa)
 {
