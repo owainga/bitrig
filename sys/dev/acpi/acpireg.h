@@ -456,11 +456,12 @@ struct acpidmar_devscope {
 #define DMAR_BRIDGE			0x2
 #define DMAR_IOAPIC			0x3
 #define DMAR_HPET			0x4
+#define DMAR_NAMESPACE			0x5
 	uint8_t		length;
 	uint16_t	reserved;
 	uint8_t		enumid;
 	uint8_t		bus;
-	/* struct acpidma_devpath[] list of dev function pairs */
+	/* struct acpidmar_devpath[] list of dev function pairs */
 } __packed;
 
 /* DMA Remapping Hardware Unit */
@@ -469,6 +470,7 @@ struct acpidmar_drhd {
 	uint16_t	length;
 
 	uint8_t		flags;
+#define DMAR_DRHD_PCI_ALL		0x1
 	uint8_t		reserved;
 	uint16_t	segment;
 	uint64_t	address;
