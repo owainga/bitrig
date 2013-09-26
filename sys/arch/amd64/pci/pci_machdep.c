@@ -668,9 +668,21 @@ pcireg_t acpi_pci_min_powerstate(pci_chipset_tag_t, pcitag_t);
 void acpi_pci_set_powerstate(pci_chipset_tag_t, pcitag_t, int, int);
 #endif
 
+#include "acpidmar.h"
+#if NACPIDMAR > 0
+void acpidmar_pci_hook(pci_chipset_tag_t, struct pci_attach_args *);
+#endif
+
 int
 pci_probe_device_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 {
+#if NACPIDMAR > 0
+	/*
+	 * acpidmar may change the bus_dma_tag_t of the pa if an iommu should
+	 * be used.
+	 */
+	acpidmar_pci_hook(pc, pa);
+#endif
 	return (0);
 }
 

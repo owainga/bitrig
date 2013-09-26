@@ -47,6 +47,7 @@ struct cfdriver acpidmar_cd = {
 int	 acpidmar_validate(struct acpi_dmar *);
 int	 acpidmar_validate_devscope(caddr_t, uint8_t);
 int	 acpidmar_print(void *, const char *);
+void	 acpidmar_pci_hook(pci_chipset_tag_t, struct pci_attach_args *);
 
 int
 acpidmar_match(struct device *parent, void *match, void *aux)
@@ -281,4 +282,9 @@ acpidmar_print(void *aux, const char *pnp)
 		printf("%s at %s:", aaa->aaa_name, pnp);
 
 	return (UNCONF);
+}
+
+void
+acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
+{
 }
