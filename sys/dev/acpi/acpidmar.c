@@ -327,7 +327,7 @@ ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
 	/* this may be considered cheeky */
 	return (memcmp(a, b, sizeof(*a)));
 }
-/* XXX this and the root may nered to be per domain */
+/* XXX this and the root may need to be per domain */
 RB_HEAD(acpidmar_bridges, pci_tree_bridge) acpidmar_bridges =
 	RB_INITIALIZER(&acpidmar_bridges);
 RB_PROTOTYPE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
