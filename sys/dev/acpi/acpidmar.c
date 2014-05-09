@@ -420,6 +420,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	/* recordd omain, bus, device, function */
 	/* for now we don't need interrupt information */
 	entry->pte_tag = pa->pa_tag;
+	entry->pte_parent = parent;
 
 	/*
 	 * If bridge we need to be able to look this up later for our
