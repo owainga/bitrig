@@ -394,6 +394,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		/* if we fail this early in autoconf we are fucked */
 		bridge = malloc(sizeof(*bridge), M_DEVBUF, M_WAITOK);
 
+		TAILQ_INIT(&bridge->ptb_children);
 		entry = &bridge->ptb_base;
 		entry->pte_type = DMAR_PCI_BRIDGE;
 
