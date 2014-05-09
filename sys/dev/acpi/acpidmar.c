@@ -340,6 +340,11 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	struct pci_tree_entry	*entry;
 	bool			 is_bridge = false;
 
+	
+	/* we can't currently handle anything other than 1 pci domain. */
+	if (pa->pa_domain != 0)
+		panic("%s: domain %d != 0", pa->pa_domain);
+
 	/* First, lookup direct parent in the tree */
 	if (pa->pa_bridgetag == NULL) {
 		printf("%s: searching root bus\n", __func__);
