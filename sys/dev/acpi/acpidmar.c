@@ -325,7 +325,8 @@ ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
 {
 
 	/* this may be considered cheeky */
-	return (memcmp(a, b, sizeof(*a)));
+	return (memcmp(&a->ptb_base.pte_tag, &b->ptb_base.pte_tag,
+		sizeof(pcitag_t)));
 }
 /* XXX this and the root may need to be per domain */
 RB_HEAD(acpidmar_bridges, pci_tree_bridge) acpidmar_bridges =
