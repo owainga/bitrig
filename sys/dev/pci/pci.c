@@ -577,6 +577,7 @@ pci_detach_devices(struct pci_softc *sc, int flags)
 	for (pd = LIST_FIRST(&sc->sc_devs);
 	     pd != LIST_END(&sc->sc_devs); pd = next) {
 		next = LIST_NEXT(pd, pd_next);
+		/* XXX call pci detached callback */
 		free(pd, M_DEVBUF);
 	}
 	LIST_INIT(&sc->sc_devs);
