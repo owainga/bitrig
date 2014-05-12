@@ -209,6 +209,47 @@ acpidmar_print_devscope(caddr_t devscope, uint8_t length)
 	}
 }
 
+/*
+ * Entry in the tree we will build on pci enumeration, this type is shared
+ * for all types of entities.
+ */
+struct pci_tree_entry {
+	TAILQ_ENTRY(pci_tree_entry)	 pte_entry;
+	struct pci_tree_entry		*pte_parent;
+	pcitag_t			 pte_tag;
+	enum {
+		DMAR_PCI_ROOT,
+		DMAR_PCI_BRIDGE,
+		DMAR_PCI_DEVICE,
+	}				pte_type;
+};
+
+/* Plain PCI devices don't currently need any extra data. */
+struct pci_tree_device {
+	struct pci_tree_entry 		ptd_base;
+};
+
+/*
+ * A specialisation of pci_tre_entry for a pbb so tha we can look devices up
+ * by parent and search their children.
+ */
+struct pci_tree_bridge {
+	struct pci_tree_entry 		ptb_base;
+	TAILQ_HEAD(, pci_tree_entry)	ptb_children;
+	RB_ENTRY(pci_tree_bridge)	ptb_entry;
+};
+RB_HEAD(acpidmar_bridges, pci_tree_bridge);
+
+static inline int
+ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
+{
+
+	/* this may be considered cheeky */
+	return (memcmp(&a->ptb_base.pte_tag, &b->ptb_base.pte_tag,
+		sizeof(pcitag_t)));
+}
+RB_PROTOTYPE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
+
 struct acpidmar_drhd_softc {
 	uint8_t	 	flags;
 	uint16_t	pci_domain;
@@ -217,6 +258,110 @@ struct acpidmar_drhd_softc {
 	/* actual device connected to bullshit. */
 };
 
+struct acpidmar_pci_domain {
+	struct pci_tree_bridge		apd_root; /* root of pci tree */
+	struct acpidmar_bridges		apd_bridges; /* bridge tree */
+	/* XXX linked list? */
+	struct acpidmar_drhd_softc	*apd_drhds; /* array of drhds */
+	int				apd_num_drhd;
+};
+
+struct acpidmar_softc {
+	struct acpidmar_pci_domain	**as_domains;
+	uint16_t			 as_num_pci_domains;
+
+};
+
+struct acpidmar_softc	*acpidmar_softc;
+
+void	acpidmar_add_drhd(struct acpidmar_softc *, struct acpidmar_drhd *);
+void	acpidmar_add_rmrr(struct acpidmar_softc *, struct acpidmar_rmrr *);
+
+void
+acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
+{
+	struct acpidmar_pci_domain	*domain;
+	/*
+	 * we only handle growing this array and allocating here since the
+	 * specification specfiically states that
+	 * 1) table entries are in order of type.
+	 * 2) there will be at least one drhd enry for every segment (domain in
+	 * the language of our pci stack) in the machine.
+	 * so if we don't haven allocated domain in later entry types then the
+	 * table is bad.
+	 */
+	if (drhd->segment >= sc->as_num_pci_domains) {
+		/*
+		 * It is easier to use an array of pointers here than it is
+		 * to fix up rb trees etc when we move the parent. We could
+		 * do an initial scan and allocate the domains upfront then
+		 * rescan to fill in, if we chose.
+		 */
+		struct acpidmar_pci_domain **newsegments;
+
+		if  (ULONG_MAX / sizeof(*sc->as_domains) < drhd->segment + 1)
+			panic("%s: overflow!");
+		newsegments = malloc(sizeof(*sc->as_domains) *
+			(drhd->segment + 1), M_DEVBUF, M_WAITOK);
+		memcpy(newsegments, sc->as_domains,
+		    sizeof(*sc->as_domains) * sc->as_num_pci_domains);
+		free(sc->as_domains, M_DEVBUF);
+		sc->as_domains = newsegments;
+		sc->as_num_pci_domains = drhd->segment + 1;
+	}
+	domain = sc->as_domains[drhd->segment];
+	if (domain == NULL) {
+		domain = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK|M_ZERO);
+
+		domain->apd_root.ptb_base.pte_parent = NULL;
+		domain->apd_root.ptb_base.pte_type = DMAR_PCI_ROOT;
+		TAILQ_INIT(&domain->apd_root.ptb_children);
+		RB_INIT(&domain->apd_bridges);
+
+		sc->as_domains[drhd->segment] = domain;
+	}
+
+	/* allocate drhd structure and insert */
+
+
+	printf("found drhd: 0x%llx for domain %d%s: ",
+	    drhd->address, drhd->segment, drhd->flags & DMAR_DRHD_PCI_ALL ?
+	    ", whole segment " : "");
+	acpidmar_print_devscope((uint8_t *)drhd + sizeof(*drhd),
+	    drhd->length - sizeof(*drhd));
+	printf("\n");
+}
+
+void
+acpidmar_add_rmrr(struct acpidmar_softc *sc, struct acpidmar_rmrr *rmrr)
+{
+	struct acpidmar_pci_domain	*domain;
+
+	/*
+	 * We must have seen all drhd by now and thus we should have allocated
+	 * this array correctly. If we have a missing one then the table is bad.
+	 */
+	if (rmrr->segment >= sc->as_num_pci_domains) {
+		panic("%s: rmrr with unseen pci domain %d (max %d)",
+			rmrr->segment, sc->as_num_pci_domains);
+	}
+	domain = sc->as_domains[rmrr->segment];
+	if (domain == NULL) {
+		panic("%s: rmrr with NULL pci domain %d (max %d)",
+			rmrr->segment, sc->as_num_pci_domains);
+	}
+
+	/* allocate rmrr structure and insert */
+
+
+	printf("found rmrr for 0x%llx-0x%llx for domain %d",
+	    rmrr->base, rmrr->limit, rmrr->segment);
+	acpidmar_print_devscope((uint8_t *)rmrr + sizeof(*rmrr),
+	    rmrr->length - sizeof(*rmrr));
+	printf("\n");
+}
+
+
 void
 acpidmar_attach(struct device *parent, struct device *self, void *aux)
 {
@@ -224,7 +369,11 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 	struct acpi_dmar	*dmar = (struct acpi_dmar *)aaa->aaa_table;
 	caddr_t			 addr;
 
-	/* Do some sanity checks before committing to run in APIC mode. */
+	if (acpidmar_softc != NULL) {
+		panic("%s: we've already got one!", __func__);
+	}
+
+	/* Sanity check table before we start building */
 	if (!acpidmar_validate(dmar)) {
 		printf(": invalid, skipping\n");
 		return;
@@ -232,30 +381,21 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 
 	printf(": checks out as valid\n");
 
+	acpidmar_softc = malloc(sizeof(*acpidmar_softc), M_DEVBUF,
+		M_WAITOK|M_ZERO);
+
 	addr = (caddr_t)(dmar + 1);
 
 	while (addr < (caddr_t)dmar + dmar->hdr.length) {
 		union acpidmar_entry *entry = (union acpidmar_entry *)addr;
 		u_int8_t length = entry->length;
 
-		/* no sanity checks here, we already checked everything */
 		switch (entry->type) {
 		case DMAR_DRHD:
-			printf("found drhd: 0x%llx for domain %d%s: ",
-			    entry->drhd.address, entry->drhd.segment,
-			    entry->drhd.flags & DMAR_DRHD_PCI_ALL ?
-			    ", whole segment " : "");
-			acpidmar_print_devscope(addr + sizeof(entry->drhd),
-				length - sizeof(entry->drhd));
-			printf("\n");
+			acpidmar_add_drhd(acpidmar_softc, &entry->drhd);
 			break;
 		case DMAR_RMRR:
-			printf("found rmrr for 0x%llx-0x%llx for domain %d",
-			    entry->rmrr.base, entry->rmrr.limit,
-			    entry->rmrr.segment);
-			acpidmar_print_devscope(addr + sizeof(entry->rmrr),
-				length - sizeof(entry->rmrr));
-			printf("\n");
+			acpidmar_add_rmrr(acpidmar_softc, &entry->rmrr);
 			break;
 		case DMAR_ATSR:
 			printf("found atsr, not supported yet\n");
@@ -289,67 +429,40 @@ acpidmar_print(void *aux, const char *pnp)
 /* list of children */
 /* pointer to the parent dmar structure */
 
-struct pci_tree_entry {
-	TAILQ_ENTRY(pci_tree_entry)	 pte_entry;
-	struct pci_tree_entry		*pte_parent;
-	pcitag_t			 pte_tag;
-	enum {
-		DMAR_PCI_ROOT,
-		DMAR_PCI_BRIDGE,
-		DMAR_PCI_DEVICE,
-	}				pte_type;
-};
-
-/* device:function pair */
-struct pci_tree_device {
-	struct pci_tree_entry 		ptd_base;
-};
-
-/* ppb device with children. */
-struct pci_tree_bridge {
-	struct pci_tree_entry 		ptb_base;
-	TAILQ_HEAD(, pci_tree_entry)	ptb_children;
-	RB_ENTRY(pci_tree_bridge)	ptb_entry;
-};
-
-struct pci_tree_bridge dmar_pci_root = {
-	.ptb_base = {
-		.pte_parent = NULL,
-		.pte_type = DMAR_PCI_ROOT,
-	},
-	.ptb_children = TAILQ_HEAD_INITIALIZER((&dmar_pci_root)->ptb_children),
-};
-
-static inline int
-ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
-{
-
-	/* this may be considered cheeky */
-	return (memcmp(&a->ptb_base.pte_tag, &b->ptb_base.pte_tag,
-		sizeof(pcitag_t)));
-}
-/* XXX this and the root may need to be per domain */
-RB_HEAD(acpidmar_bridges, pci_tree_bridge) acpidmar_bridges =
-	RB_INITIALIZER(&acpidmar_bridges);
-RB_PROTOTYPE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 RB_GENERATE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
 void
 acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 {
-	struct pci_tree_bridge	*parent;
-	struct pci_tree_entry	*entry;
-	bool			 is_bridge = false;
+	struct acpidmar_pci_domain	*domain;
+	struct pci_tree_bridge		*parent;
+	struct pci_tree_entry		*entry;
+	bool				 is_bridge = false;
 
 	
-	/* we can't currently handle anything other than 1 pci domain. */
-	if (pa->pa_domain != 0)
-		panic("%s: domain %d != 0", pa->pa_domain);
+	if (acpidmar_softc == NULL) {
+		return;
+	}
+
+	if (pa->pa_domain >= acpidmar_softc->as_num_pci_domains) {
+		panic("%s: domain %d >= %d", pa->pa_domain,
+			acpidmar_softc->as_num_pci_domains);
+	}
+
+	domain = acpidmar_softc->as_domains[pa->pa_domain];
+	/*
+	 * If it against the spec to have a domain in the system without
+	 * an drhd entry, so if this occurs then either we have bugs, or the
+	 * acpi table is full of horrific lies.
+	 */
+	if (domain == NULL) {
+		panic("%s: no domain for domain %d", pa->pa_domain);
+	}
 
 	/* First, lookup direct parent in the tree */
 	if (pa->pa_bridgetag == NULL) {
 		printf("%s: searching root bus\n", __func__);
-		parent = &dmar_pci_root;
+		parent = &domain->apd_root;
 	} else {
 		struct pci_tree_bridge  search;
 		{
@@ -361,9 +474,8 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		}
 
 		search.ptb_base.pte_tag = *pa->pa_bridgetag;
-		if ((parent = RB_FIND(acpidmar_bridges, &acpidmar_bridges, 
+		if ((parent = RB_FIND(acpidmar_bridges, &domain->apd_bridges, 
 			&search)) == NULL) {
-			/* XXX report bus/dev/func */
 			int bus, dev, func;
 			pci_decompose_tag(pc, *pa->pa_bridgetag, &bus, &dev,
 			    &func);
@@ -430,6 +542,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		struct pci_tree_bridge	*bridge =
 			(struct pci_tree_bridge *)entry;
 
-		RB_INSERT(acpidmar_bridges, &acpidmar_bridges, bridge);
+		/* no concurrent access, so won't be any duplicates */
+		(void)RB_INSERT(acpidmar_bridges, &domain->apd_bridges, bridge);
 	}
 }
