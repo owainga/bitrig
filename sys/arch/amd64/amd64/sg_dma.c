@@ -255,9 +255,9 @@ sg_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 	 * If our segment size is larger than the boundary we need to 
 	 * split the transfer up into little pieces ourselves.
 	 */
-	err = extent_alloc_subregion(is->sg_ex, sgstart, sgend,
+	err = extent_alloc_subregion_with_descr(is->sg_ex, sgstart, sgend,
 	    sgsize, align, 0, (sgsize > boundary) ? 0 : boundary, 
-	    EX_NOWAIT | EX_BOUNDZERO, (u_long *)&dvmaddr);
+	    EX_NOWAIT | EX_BOUNDZERO, &spm->spm_er, (u_long *)&dvmaddr);
 	mtx_leave(&is->sg_mtx);
 	if (err != 0) {
 		sg_iomap_clear_pages(spm);
@@ -552,9 +552,9 @@ sg_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
 	 * If our segment size is larger than the boundary we need to 
 	 * split the transfer up into little pieces ourselves.
 	 */
-	err = extent_alloc_subregion(is->sg_ex, sgstart, sgend,
+	err = extent_alloc_subregion_with_descr(is->sg_ex, sgstart, sgend,
 	    sgsize, align, 0, (sgsize > boundary) ? 0 : boundary, 
-	    EX_NOWAIT | EX_BOUNDZERO, (u_long *)&dvmaddr);
+	    EX_NOWAIT | EX_BOUNDZERO, &spm->spm_er, (u_long *)&dvmaddr);
 	mtx_leave(&is->sg_mtx);
 
 	if (err != 0) {

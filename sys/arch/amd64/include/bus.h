@@ -66,6 +66,7 @@
 #ifndef _MACHINE_BUS_H_
 #define _MACHINE_BUS_H_
 
+#include <sys/extent.h>
 #include <sys/mutex.h>
 #include <sys/tree.h>
 
@@ -730,6 +731,7 @@ struct sg_page_map {
 	int			 spm_pagecnt;	/* Number of entries in use */
 	bus_addr_t		 spm_start;	/* dva when bound */
 	bus_size_t		 spm_size;	/* size of bound map */
+	struct extent_region	 spm_er;
 	struct sg_page_entry	 spm_map[1];
 };
 
