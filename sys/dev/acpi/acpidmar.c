@@ -258,14 +258,21 @@ struct acpidmar_drhd_softc {
 	uint64_t				 ads_addr;
 	uint16_t				 ads_scopelen;
 	uint8_t	 				 ads_flags;
-	/* list of devices that we know about */
-	/* actual device connected to bullshit. */
+};
+
+struct acpidmar_rmrr_softc {
+	TAILQ_ENTRY(acpidmar_rmrr_softc)	 ars_entry;
+	uint8_t					*ars_scopes;
+	uint64_t				 ars_addr;
+	uint64_t				 ars_limaddr;
+	uint16_t				 ars_scopelen;
 };
 
 struct acpidmar_pci_domain {
 	struct pci_tree_bridge			apd_root; /* root of pci tree */
 	struct acpidmar_bridges			apd_bridges; /* bridge tree */
 	TAILQ_HEAD(,acpidmar_drhd_softc)	apd_drhds;
+	TAILQ_HEAD(,acpidmar_rmrr_softc)	apd_rmrrs;
 };
 
 struct acpidmar_softc {
@@ -283,6 +290,8 @@ bool	acpidmar_single_devscope_matches(pci_chipset_tag_t,
 bool	acpidmar_devscope_matches(pci_chipset_tag_t, uint8_t *, uint16_t,
 	    struct pci_tree_entry *);
 void	acpidmar_find_drhd(pci_chipset_tag_t, struct acpidmar_pci_domain *,
+	    struct pci_tree_entry *);
+void	acpidmar_create_domain(pci_chipset_tag_t, struct acpidmar_pci_domain *,
 	    struct pci_tree_entry *);
 
 void
@@ -327,6 +336,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 		TAILQ_INIT(&domain->apd_root.ptb_children);
 		RB_INIT(&domain->apd_bridges);
 		TAILQ_INIT(&domain->apd_drhds);
+		TAILQ_INIT(&domain->apd_rmrrs);
 
 		sc->as_domains[drhd->segment] = domain;
 	}
@@ -358,6 +368,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 void
 acpidmar_add_rmrr(struct acpidmar_softc *sc, struct acpidmar_rmrr *rmrr)
 {
+	struct acpidmar_rmrr_softc	*ars;
 	struct acpidmar_pci_domain	*domain;
 
 	/*
@@ -374,14 +385,19 @@ acpidmar_add_rmrr(struct acpidmar_softc *sc, struct acpidmar_rmrr *rmrr)
 			rmrr->segment, sc->as_num_pci_domains);
 	}
 
-	/* allocate rmrr structure and insert */
-
-
 	printf("found rmrr for 0x%llx-0x%llx for domain %d",
 	    rmrr->base, rmrr->limit, rmrr->segment);
 	acpidmar_print_devscope((uint8_t *)rmrr + sizeof(*rmrr),
 	    rmrr->length - sizeof(*rmrr));
 	printf("\n");
+
+	ars = malloc(sizeof(*ars), M_DEVBUF, M_WAITOK|M_ZERO);
+
+	ars->ars_addr = rmrr->base;
+	ars->ars_limaddr = rmrr->limit;
+	ars->ars_scopes = (uint8_t *)rmrr + sizeof(*rmrr);
+	ars->ars_scopelen  = rmrr->length - sizeof(*rmrr);
+	TAILQ_INSERT_TAIL(&domain->apd_rmrrs, ars, ars_entry);
 }
 
 
@@ -577,6 +593,36 @@ acpidmar_find_drhd(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	}
 }
 
+void
+acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
+    struct pci_tree_entry *entry)
+{
+	struct acpidmar_rmrr_softc	*rmrr;
+	/* create domain for endpoint */
+
+	/*
+	 * pick appropriate rmrr devices. A reading of the spec implies that
+	 * rmrr devscope are *always* precise device endpoints. so this should
+	 * always match correctly.
+	 */
+	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
+		if (acpidmar_devscope_matches(pc, rmrr->ars_scopes,
+		    rmrr->ars_scopelen, entry)) {
+			{
+				int bus, dev, func;
+				pci_decompose_tag(pc, entry->pte_tag, &bus,
+				    &dev, &func);
+				printf("%s: %d:%d:%d matches rmrr at "
+				    "%llx-%llx\n", __func__, bus, dev, func,
+				    rmrr->ars_addr, rmrr->ars_limaddr);
+			}
+			/* add rmrr contents to permanently mapped memory */
+			continue;
+		}
+	}
+	
+}
+
 RB_GENERATE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
 void
@@ -668,6 +714,11 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	entry->pte_depth = curdepth;
 
 	acpidmar_find_drhd(pc, domain, entry);
+	if (entry->pte_type == DMAR_PCI_DEVICE) {
+		/*struct pci_tree_device	*dev = (struct pci_tree_device *)entry; */
+		acpidmar_create_domain(pc, domain, entry);
+		/* pa->pa_tag = dev->ptd_dmatag */
+	}
 	{
 		int bus, dev, func;
 		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
