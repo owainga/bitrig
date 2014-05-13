@@ -216,12 +216,14 @@ acpidmar_print_devscope(caddr_t devscope, uint8_t length)
 struct pci_tree_entry {
 	TAILQ_ENTRY(pci_tree_entry)	 pte_entry;
 	struct pci_tree_entry		*pte_parent;
+	struct acpidmar_drhd_softc	*pte_drhd;
 	pcitag_t			 pte_tag;
 	enum {
 		DMAR_PCI_ROOT,
 		DMAR_PCI_BRIDGE,
 		DMAR_PCI_DEVICE,
-	}				pte_type;
+	}				 pte_type;
+	uint8_t				 pte_depth; /* 0 if root bus */
 };
 
 /* Plain PCI devices don't currently need any extra data. */
@@ -251,19 +253,19 @@ ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
 RB_PROTOTYPE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
 struct acpidmar_drhd_softc {
-	uint8_t	 	flags;
-	uint16_t	pci_domain;
-	uint64_t	addr;
+	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
+	uint8_t					*ads_scopes;
+	uint64_t				 ads_addr;
+	uint16_t				 ads_scopelen;
+	uint8_t	 				 ads_flags;
 	/* list of devices that we know about */
 	/* actual device connected to bullshit. */
 };
 
 struct acpidmar_pci_domain {
-	struct pci_tree_bridge		apd_root; /* root of pci tree */
-	struct acpidmar_bridges		apd_bridges; /* bridge tree */
-	/* XXX linked list? */
-	struct acpidmar_drhd_softc	*apd_drhds; /* array of drhds */
-	int				apd_num_drhd;
+	struct pci_tree_bridge			apd_root; /* root of pci tree */
+	struct acpidmar_bridges			apd_bridges; /* bridge tree */
+	TAILQ_HEAD(,acpidmar_drhd_softc)	apd_drhds;
 };
 
 struct acpidmar_softc {
@@ -276,10 +278,17 @@ struct acpidmar_softc	*acpidmar_softc;
 
 void	acpidmar_add_drhd(struct acpidmar_softc *, struct acpidmar_drhd *);
 void	acpidmar_add_rmrr(struct acpidmar_softc *, struct acpidmar_rmrr *);
+bool	acpidmar_single_devscope_matches(pci_chipset_tag_t,
+	    struct acpidmar_devscope *, struct pci_tree_entry *);
+bool	acpidmar_devscope_matches(pci_chipset_tag_t, uint8_t *, uint16_t,
+	    struct pci_tree_entry *);
+void	acpidmar_find_drhd(pci_chipset_tag_t, struct acpidmar_pci_domain *,
+	    struct pci_tree_entry *);
 
 void
 acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 {
+	struct acpidmar_drhd_softc	*ads;
 	struct acpidmar_pci_domain	*domain;
 	/*
 	 * we only handle growing this array and allocating here since the
@@ -302,7 +311,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 		if  (ULONG_MAX / sizeof(*sc->as_domains) < drhd->segment + 1)
 			panic("%s: overflow!");
 		newsegments = malloc(sizeof(*sc->as_domains) *
-			(drhd->segment + 1), M_DEVBUF, M_WAITOK);
+			(drhd->segment + 1), M_DEVBUF, M_WAITOK|M_ZERO);
 		memcpy(newsegments, sc->as_domains,
 		    sizeof(*sc->as_domains) * sc->as_num_pci_domains);
 		free(sc->as_domains, M_DEVBUF);
@@ -317,6 +326,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 		domain->apd_root.ptb_base.pte_type = DMAR_PCI_ROOT;
 		TAILQ_INIT(&domain->apd_root.ptb_children);
 		RB_INIT(&domain->apd_bridges);
+		TAILQ_INIT(&domain->apd_drhds);
 
 		sc->as_domains[drhd->segment] = domain;
 	}
@@ -330,6 +340,19 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	acpidmar_print_devscope((uint8_t *)drhd + sizeof(*drhd),
 	    drhd->length - sizeof(*drhd));
 	printf("\n");
+
+	ads = malloc(sizeof(*ads), M_DEVBUF, M_WAITOK|M_ZERO);
+
+	ads->ads_flags = drhd->flags;
+	ads->ads_addr = drhd->address;
+	ads->ads_scopes = (uint8_t *)drhd + sizeof(*drhd);
+	ads->ads_scopelen  = drhd->length - sizeof(*drhd);
+	TAILQ_INSERT_TAIL(&domain->apd_drhds, ads, ads_entry);
+
+	/* If we are the catch-all for this domain then root has us. */
+	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
+		domain->apd_root.ptb_base.pte_drhd = ads;
+	}
 }
 
 void
@@ -425,9 +448,134 @@ acpidmar_print(void *aux, const char *pnp)
 	return (UNCONF);
 }
 
-/* rb tree of entries */
-/* list of children */
-/* pointer to the parent dmar structure */
+/*
+ * acpidmar_single_devscope_matches returns true if the single device scope
+ * in scope matches the device in entry.
+ */
+bool
+acpidmar_single_devscope_matches(pci_chipset_tag_t pc,
+    struct acpidmar_devscope *scope, struct pci_tree_entry *entry)
+{
+	int				 bus, dev, func;
+	uint8_t				 path_len = (scope->length -
+					     sizeof(*scope))/2;
+	uint8_t				 *path_entry;
+
+	if (entry->pte_depth + 1 != path_len) {
+		return (false);
+	}
+
+	/*
+	 * Check that the type of device matches the type of scope.
+	 * So far all we care about is endpoints and bridges.
+	 */
+	switch (scope->type) {
+	case DMAR_ENDPOINT:
+		if (entry->pte_type != DMAR_PCI_DEVICE)
+			return (false);
+		break;
+	case DMAR_BRIDGE:
+		if (entry->pte_type != DMAR_PCI_BRIDGE)
+			return (false);
+		break;
+	default:
+		return (false);
+	}
+
+	/* point to last entry in the path */
+	path_entry = (uint8_t *)scope + scope->length - 2;
+	/* validate path starting with bottom and walking up */
+	for (;;) {
+		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+
+		if (dev != path_entry[0] || func != path_entry[1]) {
+			return (false);
+		}
+
+		path_entry -= 2;
+		/* all but the last loop */
+		if (entry->pte_depth == 0)
+			break;
+		entry = entry->pte_parent;
+	}
+
+	/*
+	 * if we are still here, the dev/func paths worked all the way up to the
+	 * top bus. all that remains is for us to check that the initial bus
+	 * matches. The current entry will be non null and have a depth of 0.
+	 */
+	KASSERT(entry != NULL && entry->pte_depth == 0);
+
+	pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+	if (bus != scope->bus) {
+		return (false);
+	}
+	return (true);
+}
+
+/*
+ * acpidmar_devscope_matches returns true if one of the device scopes
+ * in scope-scope+scopelen matches the device in entry.
+ */
+bool
+acpidmar_devscope_matches(pci_chipset_tag_t pc, uint8_t *scopes,
+    uint16_t scopelen, struct pci_tree_entry *entry)
+{
+	uint8_t		*pos = scopes;
+	
+	while (pos < scopes + scopelen) {
+		struct acpidmar_devscope	*scope =
+		    (struct acpidmar_devscope *)pos;
+		if (acpidmar_single_devscope_matches(pc, scope, entry))
+			return (true);
+
+		pos += scope->length;
+	}
+	return (false);
+}
+
+/*
+ * acpidmar_find_drhd fills in the pte_drhd member of the provided entry.
+ * we search all of the known drhds to find any that match, if none do we use
+ * the catch-all if provided.
+ */
+void
+acpidmar_find_drhd(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
+    struct pci_tree_entry *entry)
+{
+	struct acpidmar_drhd_softc	*drhd;
+
+	TAILQ_FOREACH(drhd, &domain->apd_drhds, ads_entry) {
+		/*
+		 * We don't expicitly look at the catchall, we always get it
+		 * from parent devices (or the fake root device).
+		 */
+		if (drhd->ads_flags & DMAR_DRHD_PCI_ALL) {
+			continue;
+		}
+
+		if (acpidmar_devscope_matches(pc, drhd->ads_scopes,
+		    drhd->ads_scopelen, entry)) {
+			entry->pte_drhd = drhd;
+			return;
+		}
+	}
+
+	/*
+	 * parent is always non null. in the case of the root bus it points
+	 * to our root entry. if root->drhd is NULL then we have no catchall
+	 * which is only valid if all other drhds match otehr devices. If we
+	 * hit that case either we have a nasty bug, or the table is bad.
+	 */
+	entry->pte_drhd = entry->pte_parent->pte_drhd;
+
+	if (entry->pte_drhd == NULL) {
+		int bus, dev, func;
+		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+		panic("%s: %d:%d:%d has no valid dmar mapping\n",
+		    __func__, bus, dev, func);
+	}
+}
 
 RB_GENERATE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
@@ -438,6 +586,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	struct pci_tree_bridge		*parent;
 	struct pci_tree_entry		*entry;
 	bool				 is_bridge = false;
+	uint8_t				 curdepth;
 
 	
 	if (acpidmar_softc == NULL) {
@@ -461,17 +610,10 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 
 	/* First, lookup direct parent in the tree */
 	if (pa->pa_bridgetag == NULL) {
-		printf("%s: searching root bus\n", __func__);
 		parent = &domain->apd_root;
+		curdepth = 0;
 	} else {
 		struct pci_tree_bridge  search;
-		{
-			int bus, dev, func;
-			pci_decompose_tag(pc, *pa->pa_bridgetag, &bus, &dev,
-			    &func);
-			printf("%s: searching child bus %d:%d:%d\n", __func__,
-			    bus, dev, func);
-		}
 
 		search.ptb_base.pte_tag = *pa->pa_bridgetag;
 		if ((parent = RB_FIND(acpidmar_bridges, &domain->apd_bridges, 
@@ -482,6 +624,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 			panic("%s: can't find parent %d:%d:%d in bridge list\n",
 			    __func__, bus, dev, func);
 		}
+		curdepth = parent->ptb_base.pte_depth + 1;
 	}
 
 	/*
@@ -490,10 +633,6 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	 */
 	TAILQ_FOREACH(entry, &parent->ptb_children, pte_entry) {
 		if (entry->pte_tag == pa->pa_tag) {
-			int bus, dev, func;
-			pci_decompose_tag(pc, pa->pa_tag, &bus, &dev, &func);
-			printf("%s: found %d:%d:%d already in tree\n",
-			    __func__, bus, dev, func);
 			/* report we found it, swizzle dma tag and return */
 			return;
 		}
@@ -520,19 +659,23 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		entry->pte_type = DMAR_PCI_DEVICE;
 	}
 
-	{
-
-		int bus, dev, func;
-		pci_decompose_tag(pc, pa->pa_tag, &bus, &dev, &func);
-		printf("%s: %d:%d:%d not found creating (bridge: %s)\n",
-		    __func__, bus, dev, func, is_bridge ? "yes" : "no");
-	}
 	/* XXX set up tag, allocate dma domain, etc, set up tag. */
 	/* else create domain, dma tag etc */
 	/* recordd omain, bus, device, function */
 	/* for now we don't need interrupt information */
 	entry->pte_tag = pa->pa_tag;
 	entry->pte_parent = &parent->ptb_base;
+	entry->pte_depth = curdepth;
+
+	acpidmar_find_drhd(pc, domain, entry);
+	{
+		int bus, dev, func;
+		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+		printf("%s: %d:%d:%d matches drhd at %llx\n",
+		    __func__, bus, dev, func, entry->pte_drhd->ads_addr);
+	}
+//	acpidmar_match_rmrrs(pc, domain, entry);
+	TAILQ_INSERT_TAIL(&parent->ptb_children, entry, pte_entry);
 
 	/*
 	 * If bridge we need to be able to look this up later for our
