@@ -79,6 +79,45 @@ void		sg_iomap_unload_map(struct sg_cookie *, struct sg_page_map *);
 void		sg_iomap_destroy(struct sg_page_map *);
 void		sg_iomap_clear_pages(struct sg_page_map *);
 
+int
+sg_dmatag_alloc(char *name, void *hdl, bus_addr_t start, bus_size_t size,
+    void bind_page(void *, bus_addr_t, paddr_t, int),
+    void unbind_page(void *, bus_addr_t), void flush_tlb(void *),
+    bus_dma_tag_t *dmat)
+{
+	struct bus_dma_tag	*tag;
+	struct sg_cookie	*cookie;
+
+	if ((tag = malloc(sizeof(*tag), M_DEVBUF,
+	    M_WAITOK | M_CANFAIL)) == NULL)
+		return (ENOMEM);
+
+	if ((cookie = sg_dmatag_init("agpgtt", hdl, start, size,
+		bind_page, unbind_page, flush_tlb)) == NULL) {
+		free(tag, M_DEVBUF);
+		return (ENOMEM);
+	}
+
+	tag->_cookie = cookie;
+	tag->_dmamap_create = sg_dmamap_create;
+	tag->_dmamap_destroy = sg_dmamap_destroy;
+	tag->_dmamap_load = sg_dmamap_load;
+	tag->_dmamap_load_mbuf = sg_dmamap_load_mbuf;
+	tag->_dmamap_load_uio = sg_dmamap_load_uio;
+	tag->_dmamap_load_raw = sg_dmamap_load_raw;
+	tag->_dmamap_unload = sg_dmamap_unload;
+	tag->_dmamem_alloc = sg_dmamem_alloc;
+	tag->_dmamem_free = _bus_dmamem_free;
+	tag->_dmamem_map = _bus_dmamem_map;
+	tag->_dmamem_unmap = _bus_dmamem_unmap;
+	tag->_dmamem_mmap = _bus_dmamem_mmap;
+	tag->_dmamap_sync = _bus_dmamap_sync;
+
+	*dmat = tag;
+	return (0);
+
+}
+
 struct sg_cookie *
 sg_dmatag_init(char *name, void *hdl, bus_addr_t start, bus_size_t size,
     void bind(void *, bus_addr_t, paddr_t, int),

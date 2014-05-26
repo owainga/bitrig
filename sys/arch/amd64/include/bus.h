@@ -735,6 +735,10 @@ struct sg_page_map {
 	struct sg_page_entry	 spm_map[1];
 };
 
+int			sg_dmatag_alloc(char *, void *, bus_addr_t, bus_size_t,
+			    void (*)(void *, vaddr_t, paddr_t, int),
+			    void (*)(void *, vaddr_t), void (*)(void *),
+			    bus_dma_tag_t *);
 struct sg_cookie	*sg_dmatag_init(char *, void *, bus_addr_t, bus_size_t,
 			    void (*)(void *, vaddr_t, paddr_t, int),
 			    void (*)(void *, vaddr_t), void (*)(void *));
