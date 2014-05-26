@@ -15,6 +15,11 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+/*
+ * All section references in comments in this file are the:
+ * Intel(R) Virtualization Technology For Directed I/O Architecture
+ * Specification. September 2013.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -25,6 +30,8 @@
 #include <machine/apicvar.h>
 #include <machine/cpuvar.h>
 #include <machine/bus.h>
+
+#include <uvm/uvm_extern.h>
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
@@ -210,6 +217,224 @@ acpidmar_print_devscope(caddr_t devscope, uint8_t length)
 }
 
 /*
+ * Section 9.1
+ * Entry in root_table. These point to the context_tables for a bus.
+ */
+#define RE_PRESENT	(1ULL<<0)
+struct root_entry {
+	uint64_t	 high;
+	uint64_t	 low;
+};
+
+static inline bool
+root_entry_is_valid(struct root_entry *entry)
+{
+	return (entry->low & RE_PRESENT);
+}
+
+static inline paddr_t
+root_entry_get_context_pointer(struct root_entry *entry)
+{
+	return (entry->low & ~(paddr_t)0xfffULL);
+}
+
+static inline struct root_entry
+make_root_entry(paddr_t context_table)
+{
+
+	if (context_table & 0xfff) {
+		panic("%s: context table %llx not 4kb aligned", __func__,
+			context_table);
+	}
+
+	struct root_entry ret = {
+		.high = 0,
+		.low = context_table | RE_PRESENT,
+	};
+
+	return (ret);
+}
+
+struct root_table {
+	struct root_entry	entries[256];
+};
+
+/*
+ * Section 9.3 Context Entry an entry in the context table.
+ * These detail the domain, address width and page table pointers for a
+ * bus/device/function triplet.
+ */
+#define	CTX_AW30BIT		(0ULL<<0)
+#define	CTX_AW39BIT		(1ULL<<0)
+#define	CTX_AW48BIT		(1ULL<<1)
+#define	CTX_AW57BIT		((1ULL<<1)|(1ULL<<0))
+#define	CTX_AW64BIT		(1ULL<<2)
+#define CTX_AWMASK		(7)
+#define CTX_DOMAIN_MASK		((1ULL<<16)-1)
+#define CTX_DOMAIN_SHIFT	(8)
+#define	CTX_TT_TRANSLATE	(0ULL<<0)
+#define	CTX_TT_FULLTRANSLATE	(1ULL<<0)
+#define	CTX_TT_PASSTHROUGH	(1ULL<<1)
+#define CTX_TT_MASK		(3ULL)
+#define CTX_TT_SHIFT		(2)
+#define CTX_FPD			(1ULL<<1)
+#define CTX_PRESENT		(1ULL<<0)
+#define CTX_SLPTPTR_MASK	(~0xfffULL)
+struct context_entry {
+	uint64_t	high;
+	uint64_t	low;
+};
+
+#ifdef notyet
+static inline struct context_entry
+make_context_entry(uint16_t domain_id,
+    uint8_t address_width, uint64_t /* XXX paddr_t? */ slptptr,
+    uint8_t translation_type)
+{
+	/* slptptr must be 12 bit aligned */
+	if (slptptr & 0xfff)
+		panic("%s: unaligned slptptr %llx", __func__, slptptr);
+	/* XXX check slptptr is page aligned */
+	struct context_entry ret =  {
+		/* 64:66 aw, 72:87 domain id */
+		.high = (uint64_t)(address_width & CTX_AWMASK) |
+		    (domain_id << CTX_DOMAIN_SHIFT),
+		/*
+		 * 12:63 second level page table, 3:2 translation type.
+		 * 1 fault processing disable, 0 present
+		 */
+		.low = slptptr |
+		    ((translation_type & CTX_TT_MASK) << CTX_TT_SHIFT) |
+		    CTX_PRESENT,
+	};
+
+	return (ret);
+}
+#endif
+
+#ifdef notyet
+static inline bool
+context_get_present(struct context_entry *ce)
+{
+	return (ce->low & CTX_PRESENT);
+}
+#endif
+
+#ifdef notyet
+static inline uint8_t 
+context_get_translation_type(struct context_entry *ce)
+{
+	return ((ce->low >> CTX_TT_SHIFT) & CTX_TT_MASK);
+}
+#endif
+
+#ifdef notyet
+static inline uint8_t 
+context_get_address_width(struct context_entry *ce)
+{
+	return (ce->high & CTX_AWMASK);
+}
+#endif
+
+#ifdef notyet
+static inline uint16_t
+context_get_domain_id(struct context_entry *ce)
+{
+	return ((ce->high >> CTX_DOMAIN_SHIFT) & CTX_DOMAIN_MASK);
+}
+#endif
+
+#ifdef notyet
+static inline uint64_t
+context_get_slptptr(struct context_entry *ce)
+{
+	return (ce->low & CTX_SLPTPTR_MASK);
+}
+#endif
+
+struct context_table {
+	struct context_entry entries[4096/16];
+};
+
+struct acpidmar_domain {
+	TAILQ_ENTRY(acpidmar_domain)	 ad_entry;	/* XXX RB? */
+	struct acpidmar_drhd_softc	*ad_parent;
+	int				 ad_refs;
+	uint16_t			 ad_id;		/* domain id */
+	uint8_t				 ad_aw;		/* address width */
+	/* list of members... */
+	/* page tables */
+	/* dma tag */
+};
+
+
+/*
+ * acpidmar_drhd_softc encapsulates all of the state required to handle a single
+ * remapping device.
+ */
+struct acpidmar_drhd_softc {
+	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
+	uint8_t					*ads_scopes;
+	uint64_t				 ads_addr;
+	uint16_t				 ads_scopelen;
+	uint16_t				 ads_next_domain;
+	uint8_t	 				 ads_flags;
+	/* register tag. */
+	/* register handle */
+
+	/* root table of paddrs for contexts for this remapper. */
+	struct root_table			*ads_rtable;
+	TAILQ_HEAD(,acpidmar_domain)		 ads_domains;
+};
+struct context_entry	*context_for_pcitag(struct acpidmar_drhd_softc *,
+			     pci_chipset_tag_t, pcitag_t, bool);
+/* given dmar, look up root and check for device. */
+/* given root context look up pci device */
+/* allocate a new one */
+/*
+ * context_for_pcitag looks up the content entry for a given pci device.
+ * if alloc_if_not_present is set then missing entries will be allocated..
+ */
+struct context_entry *
+context_for_pcitag(struct acpidmar_drhd_softc *drhd,
+    pci_chipset_tag_t pc, pcitag_t tag, bool alloc_if_not_present)
+{
+	struct vm_page		*pg;
+	struct root_entry	*root_entry;
+	struct context_table	*ctx_table;
+	int 			 bus, dev, func;
+
+	pci_decompose_tag(pc, tag, &bus, &dev, &func);
+
+	/* bus can't physically be over 255 */
+	root_entry = &(drhd->ads_rtable->entries[bus]);
+	if (root_entry_is_valid(root_entry)) {
+		pg = PHYS_TO_VM_PAGE(
+		    root_entry_get_context_pointer(root_entry));
+	} else {
+		struct pglist	 pglist;
+
+		if (!alloc_if_not_present)
+			return (NULL);
+		TAILQ_INIT(&pglist);
+		/*
+		 * WAITOK can't fail. zeroed out page is equal to all invalid
+		 * contexts.
+		 */
+		(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
+			1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
+		pg = TAILQ_FIRST(&pglist);
+
+		drhd->ads_rtable->entries[bus] = make_root_entry(VM_PAGE_TO_PHYS(pg));
+		/* root_entry is now valid  */
+	} 
+
+	ctx_table = (struct context_table *)pmap_map_direct(pg);
+
+	return (&ctx_table->entries[(dev << 4) | func]);
+}
+
+/*
  * Entry in the tree we will build on pci enumeration, this type is shared
  * for all types of entities.
  */
@@ -252,14 +477,6 @@ ptb_cmp(struct pci_tree_bridge *a, struct pci_tree_bridge *b)
 }
 RB_PROTOTYPE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
-struct acpidmar_drhd_softc {
-	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
-	uint8_t					*ads_scopes;
-	uint64_t				 ads_addr;
-	uint16_t				 ads_scopelen;
-	uint8_t	 				 ads_flags;
-};
-
 struct acpidmar_rmrr_softc {
 	TAILQ_ENTRY(acpidmar_rmrr_softc)	 ars_entry;
 	uint8_t					*ars_scopes;
@@ -299,6 +516,8 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 {
 	struct acpidmar_drhd_softc	*ads;
 	struct acpidmar_pci_domain	*domain;
+	struct vm_page			*pg;
+	struct pglist			 pglist;
 	/*
 	 * we only handle growing this array and allocating here since the
 	 * specification specfiically states that
@@ -357,7 +576,28 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	ads->ads_addr = drhd->address;
 	ads->ads_scopes = (uint8_t *)drhd + sizeof(*drhd);
 	ads->ads_scopelen  = drhd->length - sizeof(*drhd);
+	ads->ads_next_domain = 1;
+	TAILQ_INIT(&ads->ads_domains);
 	TAILQ_INSERT_TAIL(&domain->apd_drhds, ads, ads_entry);
+
+	/* map registers */
+
+	/*
+	 * Allocate memory for the root context table.
+	 * XXX km_alloc(, &kv_singlepage) would also work here but we would have
+	 * to have a structure to keep track of the virtual address mappings.
+	 * for simplicity we make useo f the fact this code as written will only
+	 * work on PMAP_DIRECT architectures and we allocate pages directly 
+	 * then we can find their virtual address implicitly.
+	 */
+	TAILQ_INIT(&pglist);
+	/* WAITOK can't fail */
+	(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
+		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
+	pg = TAILQ_FIRST(&pglist);
+	ads->ads_rtable = (struct root_table *)pmap_map_direct(pg);
+
+	/* program root context */
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
@@ -597,29 +837,110 @@ void
 acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
     struct pci_tree_entry *entry)
 {
+	struct acpidmar_drhd_softc	*drhd;
 	struct acpidmar_rmrr_softc	*rmrr;
+	struct acpidmar_domain		*domain;
+	struct context_entry		*ctx_entry;
+	paddr_t				 highest_rmrr;
+	uint16_t			 domain_id;
+	uint8_t				 address_width;
 	/* create domain for endpoint */
 
 	/*
-	 * pick appropriate rmrr devices. A reading of the spec implies that
+	 * XXX check if parent is a pcie-pci{,-x}  bridge (or any parent is)
+	 * in which case we inherit the domain of our parent and goto map_rmrrs.
+	 * with the reference count incremented.
+	 */
+
+	/*
+	 * XXX handle wrapping? This may matter when we allow devices to move
+	 * domain for virtualisation, for now the domain counter should be
+	 * enough to fit all child devices.
+	 */
+	drhd = entry->pte_drhd;
+	if (drhd->ads_next_domain == 0) {
+		panic("%s: domain count full!", __func__);
+	}
+	domain_id = drhd->ads_next_domain++;
+
+	/* make new domain struct. */
+	domain = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK | M_ZERO);
+	domain->ad_id = domain_id;
+
+
+	/*
+	 * Pick appropriate rmrr devices. A reading of the spec implies that
 	 * rmrr devscope are *always* precise device endpoints. so this should
 	 * always match correctly.
+	 * We actually scan this list twice, once to see what the highest memory
+	 * address we need care about is (so we can pick the domain size), the
+	 * second time actualy maps the memory. If this ever becomes a
+	 * bottleneck we could save a list of known indexes into the rmrr array
+	 * and use that for the second iteration.
 	 */
+	highest_rmrr = 0;
 	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
 		if (acpidmar_devscope_matches(pc, rmrr->ars_scopes,
 		    rmrr->ars_scopelen, entry)) {
-			{
-				int bus, dev, func;
-				pci_decompose_tag(pc, entry->pte_tag, &bus,
-				    &dev, &func);
-				printf("%s: %d:%d:%d matches rmrr at "
-				    "%llx-%llx\n", __func__, bus, dev, func,
-				    rmrr->ars_addr, rmrr->ars_limaddr);
-			}
-			/* add rmrr contents to permanently mapped memory */
-			continue;
+			if (rmrr->ars_limaddr > highest_rmrr)
+				highest_rmrr = rmrr->ars_limaddr;
 		}
 	}
+
+	/*
+	 * Pick domain address width. We default to 30bits (1gb address space
+	 * per domain, but if we have any hardware that won't fit in that 1gb
+	 * space (for example some rmrrs are just under the 4gig mark) we need
+	 * to increase the address space. We pick the minimum we can get away
+	 * with to reduce page table overhead.
+	 */
+	if (highest_rmrr > ((1ULL<<57)-1)) {
+		/* bigger than 57 bits */
+		domain->ad_aw = CTX_AW64BIT;
+	} else if (highest_rmrr > ((1ULL<<48)-1)) {
+		domain->ad_aw = CTX_AW57BIT;
+	} else if (highest_rmrr > ((1ULL<<39)-1)) {
+		domain->ad_aw = CTX_AW48BIT;
+	} else if (highest_rmrr > ((1ULL<<30)-1)) {
+		domain->ad_aw = CTX_AW39BIT;
+	} else {
+		domain->ad_aw = CTX_AW30BIT;
+	}
+	/* calculate start, end and figure out the sizes etc. */
+	/* allocate root pagetable */
+	ctx_entry = context_for_pcitag(drhd, pc, entry->pc_tag, true);
+	/* program page tables and domain id */
+
+	/* note that device should not have translation switched on yet */
+/* map_rmrrs: */
+	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
+		if (!acpidmar_devscope_matches(pc, rmrr->ars_scopes,
+		    rmrr->ars_scopelen, entry)) {
+			continue;
+		}
+		{
+			int bus, dev, func;
+			pci_decompose_tag(pc, entry->pte_tag, &bus,
+			    &dev, &func);
+			printf("%s: %d:%d:%d matches rmrr at "
+			    "%llx-%llx\n", __func__, bus, dev, func,
+			    rmrr->ars_addr, rmrr->ars_limaddr);
+		}
+		/*
+		 * We should only hit this if we have a pci-pci-{,x} btidge with
+		 * a rmrr behind it with an odd space. This should be pretty
+		 * unusual. (in the case it happens we could copy the
+		 * pagetables, add anther level, redo the extent and then pray.
+		 */
+		/* if address > address space */
+			/* panic("%s: rmrr 0x%llx-0x%llx doesn't fit "+
+			    "in domain address width %d", __func__,
+			    rmrr->ars_addr, rmrr->ars_limaddr, address_width);
+			 */
+		/* map rmrr into address space and reserve from dmatag extent.  */
+	}
+
+
 	
 }
 
@@ -740,3 +1061,97 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		(void)RB_INSERT(acpidmar_bridges, &domain->apd_bridges, bridge);
 	}
 }
+/* bootstrapping - how to handle gpu enablement. */
+/* map registers. bus_space_map -> no tag! */
+
+/* allocate context page directory page.  enter into root entry*/
+
+/* get domain width from capability register. */
+/* don't need extented context entries (no PASID) */
+/*
+ * address width must be 39 bits (001 in AW field) since some RMRRs don't fit
+ * otherwise.
+ * in practice though we can force it to be the lowest 4gig
+ */
+ /* check extended capability register for passthrough -> can put gpu as pass
+  * through for now
+  */
+
+
+/* dmar -> enabbled, next domain, number of domains? pointer to root context.*/
+
+
+#define PTE_READ	(1<<0)
+#define PTE_WRITE	(1<<1)
+#define PTE_EXECUTE	(1<<2)
+#ifdef notyet
+static inline uint64_t
+make_sl_pml4e(paddr_t slpdp)
+{
+	if (slpdp & 0xfff)
+		panic("%s: unaligned slppdp %llx", __func__, slpdp);
+	// for now just set write and read bits on all upper level page tables.
+	// we dont do virtualisation and thus the execute bit shouldn't matter.
+	return ((uint64_t)slpdp | PTE_READ | PTE_WRITE);
+}
+#endif
+
+#define SLPDPE_1GBPAGE	(1<<7)
+/*
+ * Fill in a second-level pdp entry that references a secodn level page
+ * directory. The format for 1GB pages is different and not currently handled.
+ */
+#ifdef notyet
+static inline uint64_t
+make_sl_pdpe(paddr_t slpdp)
+{
+	if (slpdp & 0xfff)
+		panic("%s: unaligned slppdp %llx", __func__, slpdp);
+	return ((uint64_t)slpdp | PTE_READ | PTE_WRITE);
+}
+#endif
+
+#define SLPDE_2MBPAGE	(1<<7)
+/* 
+ * returns the value of a filled in second-level page directory entry pointing
+ * to the given second-level page table. The format for 2MB pages differs and
+ * is not currently handled.
+ */
+#ifdef notyet
+static inline uint64_t
+make_slpde(paddr_t slpt)
+{
+	if (slpt & 0xfff)
+		panic("%s: unaligned slpt %llx", __func__, slpt);
+	/*
+	 * XXX for now we just assume we'll need both read and write at lower
+	 * levels.
+	 */
+	return ((uint64_t)slpt | PTE_READ | PTE_WRITE);
+}
+#endif
+
+#define PTE_TRANSIENT	(1ULL<<62)
+#define PTE_SNOOP	(1ULL<<11)
+#define PTE_IPAT	(1ULL<<6)
+#define PTE_EMT_NC	0ULL
+#define PTE_EMT_WC	1ULL
+#define PTE_EMT_WT	4ULL
+#define PTE_EMT_WP	5ULL
+#define PTE_EMT_WB	6ULL
+#define PTE_EMT_MASK	0x7ULL
+#define PTE_EMT_SHIFT	3
+//static inline uint64_t
+//make_slpte(paddr_t page)
+//{
+//	if (page & 0xfff)
+//		panic("%s: unaligned page %llx", __func__, page);
+//}
+
+
+/* page table definitions */
+/* inlines to select the right root context for a tag */
+/* inlines to select the domain */
+/* inlines to select the right pte */
+
+
