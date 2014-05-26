@@ -285,7 +285,6 @@ struct context_entry {
 	uint64_t	low;
 };
 
-#ifdef notyet
 static inline struct context_entry
 make_context_entry(uint16_t domain_id,
     uint8_t address_width, uint64_t /* XXX paddr_t? */ slptptr,
@@ -310,7 +309,6 @@ make_context_entry(uint16_t domain_id,
 
 	return (ret);
 }
-#endif
 
 #ifdef notyet
 static inline bool
@@ -359,14 +357,20 @@ struct context_table {
 struct acpidmar_domain {
 	TAILQ_ENTRY(acpidmar_domain)	 ad_entry;	/* XXX RB? */
 	struct acpidmar_drhd_softc	*ad_parent;
+	bus_dma_tag_t			 ad_dmat;
 	int				 ad_refs;
 	uint16_t			 ad_id;		/* domain id */
 	uint8_t				 ad_aw;		/* address width */
 	/* list of members... */
 	/* page tables */
+	void				*ad_root_entry;
+	struct vm_page			*ad_slptptr;
 	/* dma tag */
 };
 
+void acpidmar_domain_bind_page(void *, bus_addr_t, paddr_t, int);
+void acpidmar_domain_unbind_page(void *, bus_addr_t);
+void acpidmar_domain_flush_tlb(void *);
 
 /*
  * acpidmar_drhd_softc encapsulates all of the state required to handle a single
@@ -839,12 +843,12 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 {
 	struct acpidmar_drhd_softc	*drhd;
 	struct acpidmar_rmrr_softc	*rmrr;
-	struct acpidmar_domain		*domain;
+	struct acpidmar_domain		*ad;
 	struct context_entry		*ctx_entry;
+	struct pglist	 		 pglist;
+	bus_size_t			 address_size;
 	paddr_t				 highest_rmrr;
 	uint16_t			 domain_id;
-	uint8_t				 address_width;
-	/* create domain for endpoint */
 
 	/*
 	 * XXX check if parent is a pcie-pci{,-x}  bridge (or any parent is)
@@ -864,9 +868,8 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	domain_id = drhd->ads_next_domain++;
 
 	/* make new domain struct. */
-	domain = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK | M_ZERO);
-	domain->ad_id = domain_id;
-
+	ad = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK | M_ZERO);
+	ad->ad_id = domain_id;
 
 	/*
 	 * Pick appropriate rmrr devices. A reading of the spec implies that
@@ -889,27 +892,46 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 
 	/*
 	 * Pick domain address width. We default to 30bits (1gb address space
-	 * per domain, but if we have any hardware that won't fit in that 1gb
+	 * per domain) but if we have any hardware that won't fit in that 1gb
 	 * space (for example some rmrrs are just under the 4gig mark) we need
 	 * to increase the address space. We pick the minimum we can get away
 	 * with to reduce page table overhead.
 	 */
 	if (highest_rmrr > ((1ULL<<57)-1)) {
 		/* bigger than 57 bits */
-		domain->ad_aw = CTX_AW64BIT;
+		ad->ad_aw = CTX_AW64BIT;
+		address_size = ~0;
 	} else if (highest_rmrr > ((1ULL<<48)-1)) {
-		domain->ad_aw = CTX_AW57BIT;
+		ad->ad_aw = CTX_AW57BIT;
+		address_size = (1ULL<<57)-1;
 	} else if (highest_rmrr > ((1ULL<<39)-1)) {
-		domain->ad_aw = CTX_AW48BIT;
+		ad->ad_aw = CTX_AW48BIT;
+		address_size = (1ULL<<48)-1;
 	} else if (highest_rmrr > ((1ULL<<30)-1)) {
-		domain->ad_aw = CTX_AW39BIT;
+		ad->ad_aw = CTX_AW39BIT;
+		address_size = (1ULL<<39)-1;
 	} else {
-		domain->ad_aw = CTX_AW30BIT;
+		ad->ad_aw = CTX_AW30BIT;
+		address_size = (1ULL<<30)-1;
 	}
-	/* calculate start, end and figure out the sizes etc. */
+
+	/*
+	 * XXX should make these strings unique but then they'd never be
+	 * freeable.
+	 */
+	if (sg_dmatag_alloc("vt-d iommmu", ad, 0, address_size,
+	    acpidmar_domain_bind_page, acpidmar_domain_unbind_page,
+	    acpidmar_domain_flush_tlb, &ad->ad_dmat) != 0)
+		panic("%s: unable to create dma tag", __func__);
 	/* allocate root pagetable */
-	ctx_entry = context_for_pcitag(drhd, pc, entry->pc_tag, true);
-	/* program page tables and domain id */
+	TAILQ_INIT(&pglist);
+	(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
+		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
+	ad->ad_slptptr = TAILQ_FIRST(&pglist);
+	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
+	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag, true);
+	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aw,
+	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
 
 	/* note that device should not have translation switched on yet */
 /* map_rmrrs: */
@@ -938,11 +960,32 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 			    rmrr->ars_addr, rmrr->ars_limaddr, address_width);
 			 */
 		/* map rmrr into address space and reserve from dmatag extent.  */
+		/* reserve from extent */
+		/* map into address space */
 	}
 
 
 	
 }
+
+void
+acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
+{
+	panic("%s: implement me", __func__);
+}
+
+void
+acpidmar_domain_unbind_page(void *hdl, bus_addr_t pa)
+{
+	panic("%s: implement me", __func__);
+}
+
+void
+acpidmar_domain_flush_tlb(void *hdl)
+{
+	panic("%s: implement me", __func__);
+}
+
 
 RB_GENERATE_STATIC(acpidmar_bridges, pci_tree_bridge, ptb_entry, ptb_cmp);
 
