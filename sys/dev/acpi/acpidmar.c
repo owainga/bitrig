@@ -285,6 +285,7 @@ struct context_entry {
 	uint64_t	low;
 };
 
+#if testing
 static inline struct context_entry
 make_context_entry(uint16_t domain_id,
     uint8_t address_width, uint64_t /* XXX paddr_t? */ slptptr,
@@ -309,6 +310,7 @@ make_context_entry(uint16_t domain_id,
 
 	return (ret);
 }
+#endif
 
 #ifdef notyet
 static inline bool
@@ -354,13 +356,64 @@ struct context_table {
 	struct context_entry entries[4096/16];
 };
 
+int acpidmar_enter_2level(void *, bus_addr_t, paddr_t, int);
+int acpidmar_remove_2level(void *, bus_addr_t);
+int acpidmar_enter_3level(void *, bus_addr_t, paddr_t, int);
+int acpidmar_remove_3level(void *, bus_addr_t);
+int acpidmar_enter_4level(void *, bus_addr_t, paddr_t, int);
+int acpidmar_remove_4level(void *, bus_addr_t);
+int acpidmar_enter_5level(void *, bus_addr_t, paddr_t, int);
+int acpidmar_remove_5level(void *, bus_addr_t);
+int acpidmar_enter_6level(void *, bus_addr_t, paddr_t, int);
+int acpidmar_remove_6level(void *, bus_addr_t);
+
+struct acpidmar_address_space {
+	uint64_t	address_size;
+	uint8_t		address_width; /* for hardware */
+	int		(*enter_page)(void *, bus_addr_t, paddr_t, int);
+	int		(*remove_page)(void *, bus_addr_t);
+};
+
+struct acpidmar_address_space acpidmar_address_spaces[] = {
+	{
+		.address_size = (1ULL<<30)-1,
+		.address_width = CTX_AW30BIT,
+		.enter_page = acpidmar_enter_2level,
+		.remove_page = acpidmar_remove_2level,
+	},
+	{
+		.address_size = (1ULL<<39)-1,
+		.address_width = CTX_AW39BIT,
+		.enter_page = acpidmar_enter_3level,
+		.remove_page = acpidmar_remove_3level,
+	},
+	{
+		.address_size = (1ULL<<48)-1,
+		.address_width = CTX_AW48BIT,
+		.enter_page = acpidmar_enter_4level,
+		.remove_page = acpidmar_remove_4level,
+	},
+	{
+		.address_size = (1ULL<<57)-1,
+		.address_width = CTX_AW57BIT,
+		.enter_page = acpidmar_enter_5level,
+		.remove_page = acpidmar_remove_5level,
+	},
+	{
+		.address_size = (~0ULL),
+		.address_width = CTX_AW64BIT,
+		.enter_page = acpidmar_enter_6level,
+		.remove_page = acpidmar_remove_6level,
+	},
+};
+
 struct acpidmar_domain {
 	TAILQ_ENTRY(acpidmar_domain)	 ad_entry;	/* XXX RB? */
 	struct acpidmar_drhd_softc	*ad_parent;
+	struct acpidmar_address_space	*ad_aspace;
 	bus_dma_tag_t			 ad_dmat;
 	int				 ad_refs;
 	uint16_t			 ad_id;		/* domain id */
-	uint8_t				 ad_aw;		/* address width */
 	/* list of members... */
 	/* page tables */
 	void				*ad_root_entry;
@@ -435,7 +488,7 @@ context_for_pcitag(struct acpidmar_drhd_softc *drhd,
 
 	ctx_table = (struct context_table *)pmap_map_direct(pg);
 
-	return (&ctx_table->entries[(dev << 4) | func]);
+	return (&(ctx_table->entries[(dev << 4) | func]));
 }
 
 /*
@@ -844,9 +897,10 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	struct acpidmar_drhd_softc	*drhd;
 	struct acpidmar_rmrr_softc	*rmrr;
 	struct acpidmar_domain		*ad;
+#ifdef testing
 	struct context_entry		*ctx_entry;
+#endif
 	struct pglist	 		 pglist;
-	bus_size_t			 address_size;
 	paddr_t				 highest_rmrr;
 	uint16_t			 domain_id;
 
@@ -897,29 +951,22 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	 * to increase the address space. We pick the minimum we can get away
 	 * with to reduce page table overhead.
 	 */
-	if (highest_rmrr > ((1ULL<<57)-1)) {
-		/* bigger than 57 bits */
-		ad->ad_aw = CTX_AW64BIT;
-		address_size = ~0;
-	} else if (highest_rmrr > ((1ULL<<48)-1)) {
-		ad->ad_aw = CTX_AW57BIT;
-		address_size = (1ULL<<57)-1;
-	} else if (highest_rmrr > ((1ULL<<39)-1)) {
-		ad->ad_aw = CTX_AW48BIT;
-		address_size = (1ULL<<48)-1;
-	} else if (highest_rmrr > ((1ULL<<30)-1)) {
-		ad->ad_aw = CTX_AW39BIT;
-		address_size = (1ULL<<39)-1;
-	} else {
-		ad->ad_aw = CTX_AW30BIT;
-		address_size = (1ULL<<30)-1;
+	for (int i = 0; i < nitems(acpidmar_address_spaces); i++) {
+		if (highest_rmrr > acpidmar_address_spaces[i].address_size)
+			continue;
+		/*
+		 * pick the first address space width that we will fit in.
+		 * note that this always halts because the last one is the full
+		 * address space.
+		 */
+		ad->ad_aspace = &acpidmar_address_spaces[i];
 	}
 
 	/*
 	 * XXX should make these strings unique but then they'd never be
 	 * freeable.
 	 */
-	if (sg_dmatag_alloc("vt-d iommmu", ad, 0, address_size,
+	if (sg_dmatag_alloc("vt-d iommmu", ad, 0, ad->ad_aspace->address_size,
 	    acpidmar_domain_bind_page, acpidmar_domain_unbind_page,
 	    acpidmar_domain_flush_tlb, &ad->ad_dmat) != 0)
 		panic("%s: unable to create dma tag", __func__);
@@ -929,9 +976,11 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	ad->ad_slptptr = TAILQ_FIRST(&pglist);
 	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
+#if testing
 	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag, true);
-	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aw,
+	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aspace->address_width,
 	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
+#endif
 
 	/* note that device should not have translation switched on yet */
 /* map_rmrrs: */
@@ -957,11 +1006,12 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		 * unusual. (in the case it happens we could copy the
 		 * pagetables, add anther level, redo the extent and then pray.
 		 */
-		/* if address > address space */
-			/* panic("%s: rmrr 0x%llx-0x%llx doesn't fit "+
+		if (rmrr->ars_limaddr > ad->ad_aspace->address_size) {
+			panic("%s: rmrr 0x%llx-0x%llx doesn't fit "
 			    "in domain address width %d", __func__,
-			    rmrr->ars_addr, rmrr->ars_limaddr, address_width);
-			 */
+			    rmrr->ars_addr, rmrr->ars_limaddr,
+			    ad->ad_aspace->address_size);
+		}
 		/* holy layering violation batman... */
 		cookie = ad->ad_dmat->_cookie;
 
@@ -975,9 +1025,21 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		 * allocation.
 		 */
 		if (extent_alloc_subregion(cookie->sg_ex, rmrr->ars_addr,
-		    rmrr->ars_limaddr, rmrr->ars_limaddr - rmrr->ars_addr,
-		    0, 0, 0, EX_WAITOK, &result) == 0) {
-			/* map into address space */
+		    rmrr->ars_limaddr + 1,
+		    rmrr->ars_limaddr - rmrr->ars_addr + 1,
+		    4096, 0, 0, EX_WAITOK, &result) == 0) {
+			paddr_t addr;
+			int	ret;
+			for (addr = rmrr->ars_addr; addr <= rmrr->ars_limaddr;
+			    addr += PAGE_SIZE) {
+				if ((ret = ad->ad_aspace->enter_page(
+				    ad->ad_root_entry, (bus_addr_t)addr, addr,
+				    BUS_DMA_WAITOK | BUS_DMA_READ |
+				    BUS_DMA_WRITE)) != 0) {
+					panic("%s: can't enter rmrr %d",
+					    __func__, ret);
+				}
+			}
 		}
 	}
 }
@@ -1212,3 +1274,62 @@ make_slpde(paddr_t slpt)
 /* inlines to select the right pte */
 
 
+int
+acpidmar_enter_2level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	return (0);
+}
+
+int
+acpidmar_remove_2level(void *ctx, bus_addr_t vaddr)
+{
+	return (0);
+}
+
+int
+acpidmar_enter_3level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	return (0);
+}
+
+int
+acpidmar_remove_3level(void *ctx, bus_addr_t vaddr)
+{
+	return (0);
+}
+
+int
+acpidmar_enter_4level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	return (0);
+}
+
+int
+acpidmar_remove_4level(void *ctx, bus_addr_t vaddr)
+{
+	return (0);
+}
+
+int
+acpidmar_enter_5level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	return (0);
+}
+
+int
+acpidmar_remove_5level(void *ctx, bus_addr_t vaddr)
+{
+	return (0);
+}
+
+int
+acpidmar_enter_6level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	return (0);
+}
+
+int
+acpidmar_remove_6level(void *ctx, bus_addr_t vaddr)
+{
+	return (0);
+}
