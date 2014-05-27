@@ -936,6 +936,9 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	/* note that device should not have translation switched on yet */
 /* map_rmrrs: */
 	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
+		struct sg_cookie	*cookie;
+		u_long			 result;
+
 		if (!acpidmar_devscope_matches(pc, rmrr->ars_scopes,
 		    rmrr->ars_scopelen, entry)) {
 			continue;
@@ -959,13 +962,24 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 			    "in domain address width %d", __func__,
 			    rmrr->ars_addr, rmrr->ars_limaddr, address_width);
 			 */
-		/* map rmrr into address space and reserve from dmatag extent.  */
-		/* reserve from extent */
-		/* map into address space */
+		/* holy layering violation batman... */
+		cookie = ad->ad_dmat->_cookie;
+
+		/*
+		 * This is autoconf, we shouldn't see EINTR.
+		 * WAITOK is passed so we shouldn't see ENOMEM, so the only
+		 * valid error is EAGAIN meaning the space wasn't available.
+		 * in this case we assume that a previous device in this domain
+		 * shared the rmrr and thus it is already allocated and mapped.
+		 * We don't check result since we have constained the
+		 * allocation.
+		 */
+		if (extent_alloc_subregion(cookie->sg_ex, rmrr->ars_addr,
+		    rmrr->ars_limaddr, rmrr->ars_limaddr - rmrr->ars_addr,
+		    0, 0, 0, EX_WAITOK, &result) == 0) {
+			/* map into address space */
+		}
 	}
-
-
-	
 }
 
 void
