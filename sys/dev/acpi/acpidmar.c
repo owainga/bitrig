@@ -473,17 +473,18 @@ context_for_pcitag(struct acpidmar_drhd_softc *drhd,
 
 		if (!alloc_if_not_present)
 			return (NULL);
-		TAILQ_INIT(&pglist);
 		/*
 		 * WAITOK can't fail. zeroed out page is equal to all invalid
 		 * contexts.
 		 */
+		TAILQ_INIT(&pglist);
 		(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
 			1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 		pg = TAILQ_FIRST(&pglist);
 
-		drhd->ads_rtable->entries[bus] = make_root_entry(VM_PAGE_TO_PHYS(pg));
-		/* root_entry is now valid  */
+		*root_entry = make_root_entry(VM_PAGE_TO_PHYS(pg));
+
+		KASSERT(root_entry_is_valid(root_entry));
 	} 
 
 	ctx_table = (struct context_table *)pmap_map_direct(pg);
@@ -648,7 +649,6 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	 * then we can find their virtual address implicitly.
 	 */
 	TAILQ_INIT(&pglist);
-	/* WAITOK can't fail */
 	(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	pg = TAILQ_FIRST(&pglist);
@@ -897,9 +897,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	struct acpidmar_drhd_softc	*drhd;
 	struct acpidmar_rmrr_softc	*rmrr;
 	struct acpidmar_domain		*ad;
-#ifdef testing
 	struct context_entry		*ctx_entry;
-#endif
 	struct pglist	 		 pglist;
 	paddr_t				 highest_rmrr;
 	uint16_t			 domain_id;
@@ -976,8 +974,8 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	ad->ad_slptptr = TAILQ_FIRST(&pglist);
 	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
-#if testing
 	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag, true);
+#if testing
 	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aspace->address_width,
 	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
 #endif
