@@ -551,6 +551,117 @@ struct acpidmar_pci_domain {
 	TAILQ_HEAD(,acpidmar_rmrr_softc)	apd_rmrrs;
 };
 
+#define DMAR_VER_REG	0x0
+
+/* 10.4.2 Capability Register. */
+#define DMAR_CAP_REG	0x8
+#define DMAR_CAP_FL1GP		(1ULL<<56)
+#define DMAR_CAP_DRD		(1ULL<<55)
+#define DMAR_CAP_DWD		(1ULL<<54)
+#define DMAR_CAP_MAMV_MASK	0x3fULL
+#define DMAR_CAP_MAMV_SHIFT	48
+#define DMAR_CAP_NFR_MASK	0xfULL
+#define DMAR_CAP_NFR_SHIFT	40
+#define DMAR_CAP_PSI		(1ULL<<39)
+#define DMAR_CAP_SLLPS_MASK	0xfULL
+#define DMAR_CAP_SLLPS_SHIFT	34
+#define DMAR_CAP_FRO_MASK	(0x3ffULL)
+#define DMAR_CAP_FRO_SHIFT	24
+#define DMAR_CAP_ZLR		(1ULL<<22)
+#define DMAR_CAP_MGAW_MASK	0x3fULL
+#define DMAR_CAP_MGAW_SHIFT	16
+#define DMAR_CAP_SAGAW_MASK	0x1fULL
+#define DMAR_CAP_SAGAW_SHIFT	8
+#define DMAR_CAP_CM		(1ULL<<7)
+#define DMAR_CAP_PHMR		(1ULL<<6)
+#define DMAR_CAP_PLMR		(1ULL<<5)
+#define DMAR_CAP_RWBF		(1ULL<<4)
+#define DMAR_CAP_AFL		(1ULL<<3)
+#define DMAR_CAP_ND_MASK	0x7ULL
+#define DMAR_CAP_ND_SHIFT	0
+#define DMAR_CAP_ND_4BIT	0
+#define DMAR_CAP_ND_6BIT	1
+#define DMAR_CAP_ND_8BIT	2
+#define DMAR_CAP_ND_10BIT	3
+#define DMAR_CAP_ND_12BIT	4
+#define DMAR_CAP_ND_14BIT	5
+#define DMAR_CAP_ND_16BIT	6
+
+/* 10.4.3 Extended Capability Register */
+#define DMAR_ECAP_REG	0x10
+#define DMAR_ECAP_PSS_MASK	0x1fULL
+#define DMAR_ECAP_PSS_SHIFT	35
+#define DMAR_ECAP_EAFS		(1ULL<<34)
+#define DMAR_ECAP_NWFS		(1ULL<<33)
+#define DMAR_ECAP_POT		(1ULL<<32)
+#define DMAR_ECAP_SRS		(1ULL<<31)
+#define DMAR_ECAP_ERS		(1ULL<<30)
+#define DMAR_ECAP_PRS		(1ULL<<29)
+#define DMAR_ECAP_PASID		(1ULL<<28)
+#define DMAR_ECAP_DIS		(1ULL<<27)
+#define DMAR_ECAP_NEST		(1ULL<<26)
+#define DMAR_ECAP_MTS		(1ULL<<25)
+#define DMAR_ECAP_ECS		(1ULL<<24)
+#define DMAR_ECAP_MHMV_MASK	0xfULL
+#define DMAR_ECAP_MHMV_SHIFT	20
+#define DMAR_ECAP_IRO_MASK	0x3ffULL
+#define DMAR_ECAP_IRO_SHIFT	8
+#define DMAR_ECAP_SC		(1ULL<<7)
+#define DMAR_ECAP_PT		(1ULL<<6)
+#define DMAR_ECAP_EIM		(1ULL<<4)
+#define DMAR_ECAP_IR		(1ULL<<3)
+#define DMAR_ECAP_DT		(1ULL<<2)
+#define DMAR_ECAP_QI		(1ULL<<1)
+#define DMAR_ECAP_C		(1ULL<<0)
+
+/* 10.4.4 Global Command Register. */
+#define DMAR_GCMD_REG	0x18
+#define DMAR_GCMD_TE		(1ULL<<31)
+#define DMAR_GCMD_SRTP		(1ULL<<30)
+#define DMAR_GCMD_SFL		(1ULL<<29)
+#define DMAR_GCMD_EAFL		(1ULL<<28)
+#define DMAR_GCMD_WBF		(1ULL<<27)
+#define DMAR_GCMD_QIE		(1ULL<<26)
+#define DMAR_GCMD_IRE		(1ULL<<25)
+#define DMAR_GCMD_SITRP		(1ULL<<24)
+#define DMAR_GCMD_CFI		(1ULL<<23)
+
+/* 10.4.5 Global Status Register. */
+#define DMAR_GSTS_REG	0x18
+#define DMAR_GSTS_TES		(1ULL<<31)
+#define DMAR_GSTS_RTPS		(1ULL<<30)
+#define DMAR_GSTS_FLS		(1ULL<<29)
+#define DMAR_GSTS_AFLS		(1ULL<<28)
+#define DMAR_GSTS_WBFS		(1ULL<<27)
+#define DMAR_GSTS_QIES		(1ULL<<26)
+#define DMAR_GSTS_IRES		(1ULL<<25)
+#define DMAR_GSTS_ITRPS		(1ULL<<24)
+#define DMAR_GSTS_CFIS		(1ULL<<23)
+
+/* 10.4.6 Root Table Address Register. */
+#define DMAR_RTADDR_REG	0x20
+#define DMAR_DTADDR_RTT	(1ULL<<11) /* 1 for extended, 0 for normal */
+
+/* 10.4.7 Context Command Register. */
+#define DMAR_CCMD__REG	0x28
+#define DMAR_CCMD_ICC		(1ULL<<63)
+#define DMAR_CCMD_ICC		(1ULL<<63)
+#define DMAR_CCMD_CIRG_MASK	(0x3ULL)
+#define DMAR_CCMD_CIRG_SHIFT	61
+#define DMAR_CCMD_CAIG_MASK	(0x3ULL)
+#define DMAR_CCMD_CAIG_SHIFT	59
+#define DMAR_CCMD_FM_MASK	(0x3ULL)
+#define DMAR_CCMD_FM_SHIFT	32
+#define DMAR_CCMD_SID_MASK	(0xffffULL)
+#define DMAR_CCMD_SID_SHIFT	16
+#define DMAR_CCMD_DID_MASK	(0xffffULL)
+#define DMAR_CCMD_DID_SHIFT	0
+
+/* 10.4.16 Protected Memory Enable Register. */
+#define DMAR_PMEN_REG	0x64
+#define DMAR_PMEN_EPM		(1<<31) /* enable/disable */
+#define DMAR_PMEN_PRS		(1<<0)	/* status. */
+
 struct acpidmar_softc {
 	struct device			 as_dev;
 	bus_space_tag_t			 as_memt;
