@@ -422,6 +422,7 @@ void acpidmar_domain_flush_tlb(void *);
 struct acpidmar_drhd_softc {
 	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
 	uint8_t					*ads_scopes;
+	bus_space_handle_t			 ads_memh;
 	uint64_t				 ads_addr;
 	uint16_t				 ads_scopelen;
 	uint16_t				 ads_next_domain;
@@ -552,6 +553,7 @@ struct acpidmar_pci_domain {
 
 struct acpidmar_softc {
 	struct device			 as_dev;
+	bus_space_tag_t			 as_memt;
 	struct acpidmar_pci_domain	**as_domains;
 	uint16_t			 as_num_pci_domains;
 
@@ -639,6 +641,10 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 
 	ads = malloc(sizeof(*ads), M_DEVBUF, M_WAITOK|M_ZERO);
 
+	if (bus_space_map(sc->as_memt, drhd->address, PAGE_SIZE, 0,
+	    &ads->ads_memh) != 0)
+		panic("%s: failed to map registers at %llx\n", drhd->address);
+
 	ads->ads_flags = drhd->flags;
 	ads->ads_addr = drhd->address;
 	ads->ads_scopes = (uint8_t *)drhd + sizeof(*drhd);
@@ -710,6 +716,7 @@ void
 acpidmar_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct acpidmar_softc	*sc = (struct acpidmar_softc *)self;
+	struct acpi_softc	*psc = (struct acpi_softc *)parent;
 	struct acpi_attach_args	*aaa = aux;
 	struct acpi_dmar	*dmar = (struct acpi_dmar *)aaa->aaa_table;
 	caddr_t			 addr;
@@ -718,6 +725,7 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 		panic("%s: we've already got one!", __func__);
 	}
 	acpidmar_softc = sc;
+	sc->as_memt = psc->sc_memt;
 
 	/* Sanity check table before we start building */
 	if (!acpidmar_validate(dmar)) {
@@ -1176,7 +1184,6 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		printf("%s: %d:%d:%d matches drhd at %llx\n",
 		    __func__, bus, dev, func, entry->pte_drhd->ads_addr);
 	}
-//	acpidmar_match_rmrrs(pc, domain, entry);
 	TAILQ_INSERT_TAIL(&parent->ptb_children, entry, pte_entry);
 
 	/*
@@ -1192,7 +1199,6 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	}
 }
 /* bootstrapping - how to handle gpu enablement. */
-/* map registers. bus_space_map -> no tag! */
 
 /* allocate context page directory page.  enter into root entry*/
 
