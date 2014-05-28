@@ -244,7 +244,7 @@ make_root_entry(paddr_t context_table)
 
 	if (context_table & 0xfff) {
 		panic("%s: context table %llx not 4kb aligned", __func__,
-			context_table);
+			(long long)context_table);
 	}
 
 	struct root_entry ret = {
@@ -285,7 +285,6 @@ struct context_entry {
 	uint64_t	low;
 };
 
-#if testing
 static inline struct context_entry
 make_context_entry(uint16_t domain_id,
     uint8_t address_width, uint64_t /* XXX paddr_t? */ slptptr,
@@ -294,7 +293,7 @@ make_context_entry(uint16_t domain_id,
 	/* slptptr must be 12 bit aligned */
 	if (slptptr & 0xfff)
 		panic("%s: unaligned slptptr %llx", __func__, slptptr);
-	/* XXX check slptptr is page aligned */
+
 	struct context_entry ret =  {
 		/* 64:66 aw, 72:87 domain id */
 		.high = (uint64_t)(address_width & CTX_AWMASK) |
@@ -310,7 +309,6 @@ make_context_entry(uint16_t domain_id,
 
 	return (ret);
 }
-#endif
 
 #ifdef notyet
 static inline bool
@@ -444,35 +442,39 @@ struct acpidmar_drhd_softc {
 	TAILQ_HEAD(,acpidmar_domain)		 ads_domains;
 };
 struct context_entry	*context_for_pcitag(struct acpidmar_drhd_softc *,
-			     pci_chipset_tag_t, pcitag_t, bool);
-/* given dmar, look up root and check for device. */
-/* given root context look up pci device */
-/* allocate a new one */
+			     pci_chipset_tag_t, pcitag_t);
+
 /*
  * context_for_pcitag looks up the content entry for a given pci device.
  * if alloc_if_not_present is set then missing entries will be allocated..
  */
 struct context_entry *
 context_for_pcitag(struct acpidmar_drhd_softc *drhd,
-    pci_chipset_tag_t pc, pcitag_t tag, bool alloc_if_not_present)
+    pci_chipset_tag_t pc, pcitag_t tag)
 {
 	struct vm_page		*pg;
 	struct root_entry	*root_entry;
 	struct context_table	*ctx_table;
-	int 			 bus, dev, func;
+	int 			 bus, dev, func, ctx_offset;
 
 	pci_decompose_tag(pc, tag, &bus, &dev, &func);
 
-	/* bus can't physically be over 255 */
+	if (bus > nitems(drhd->ads_rtable->entries))
+		panic("%s: bus (%d) over %d!", __func__, bus,
+		    nitems(drhd->ads_rtable->entries));
+
 	root_entry = &(drhd->ads_rtable->entries[bus]);
 	if (root_entry_is_valid(root_entry)) {
+		printf("%s: context entry already valid for %d:%d:%d\n",
+			__func__, bus, dev, func);
 		pg = PHYS_TO_VM_PAGE(
 		    root_entry_get_context_pointer(root_entry));
 	} else {
 		struct pglist	 pglist;
 
-		if (!alloc_if_not_present)
-			return (NULL);
+		printf("%s: allocating context entry for %d:%d:%d\n",
+			__func__, bus, dev, func);
+
 		/*
 		 * WAITOK can't fail. zeroed out page is equal to all invalid
 		 * contexts.
@@ -489,7 +491,13 @@ context_for_pcitag(struct acpidmar_drhd_softc *drhd,
 
 	ctx_table = (struct context_table *)pmap_map_direct(pg);
 
-	return (&(ctx_table->entries[(dev << 4) | func]));
+	/* table does from dev 0, func 0 -> dev 31 func 7. 0-255 */
+	ctx_offset = (dev << 3) | func;
+	if  (ctx_offset > nitems(ctx_table->entries))
+		panic("%s: dev(%d)<<3|func(%d) > %d!", __func__, dev, func,
+		    nitems(ctx_table->entries));
+
+	return (&(ctx_table->entries[ctx_offset]));
 }
 
 /*
@@ -595,7 +603,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 		struct acpidmar_pci_domain **newsegments;
 
 		if  (ULONG_MAX / sizeof(*sc->as_domains) < drhd->segment + 1)
-			panic("%s: overflow!");
+			panic("%s: overflow!", __func__);
 		newsegments = malloc(sizeof(*sc->as_domains) *
 			(drhd->segment + 1), M_DEVBUF, M_WAITOK|M_ZERO);
 		memcpy(newsegments, sc->as_domains,
@@ -674,11 +682,11 @@ acpidmar_add_rmrr(struct acpidmar_softc *sc, struct acpidmar_rmrr *rmrr)
 	 */
 	if (rmrr->segment >= sc->as_num_pci_domains) {
 		panic("%s: rmrr with unseen pci domain %d (max %d)",
-			rmrr->segment, sc->as_num_pci_domains);
+			__func__, rmrr->segment, sc->as_num_pci_domains);
 	}
 	domain = sc->as_domains[rmrr->segment];
 	if (domain == NULL) {
-		panic("%s: rmrr with NULL pci domain %d (max %d)",
+		panic("%s: rmrr with NULL pci domain %d (max %d)", __func__,
 			rmrr->segment, sc->as_num_pci_domains);
 	}
 
@@ -974,11 +982,16 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	ad->ad_slptptr = TAILQ_FIRST(&pglist);
 	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
-	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag, true);
-#if testing
+	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag);
+	{
+		int 			 bus, dev, func;
+
+		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+		printf("%s: ctx_entry is %p for %d:%d:%d\n", __func__,
+		    ctx_entry, bus, dev, func);
+	}
 	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aspace->address_width,
 	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
-#endif
 
 	/* note that device should not have translation switched on yet */
 /* map_rmrrs: */
@@ -1006,7 +1019,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		 */
 		if (rmrr->ars_limaddr > ad->ad_aspace->address_size) {
 			panic("%s: rmrr 0x%llx-0x%llx doesn't fit "
-			    "in domain address width %d", __func__,
+			    "in domain address width %lld", __func__,
 			    rmrr->ars_addr, rmrr->ars_limaddr,
 			    ad->ad_aspace->address_size);
 		}
@@ -1028,6 +1041,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		    4096, 0, 0, EX_WAITOK, &result) == 0) {
 			paddr_t addr;
 			int	ret;
+
 			for (addr = rmrr->ars_addr; addr <= rmrr->ars_limaddr;
 			    addr += PAGE_SIZE) {
 				if ((ret = ad->ad_aspace->enter_page(
@@ -1078,7 +1092,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	}
 
 	if (pa->pa_domain >= acpidmar_softc->as_num_pci_domains) {
-		panic("%s: domain %d >= %d", pa->pa_domain,
+		panic("%s: domain %d >= %d", __func__, pa->pa_domain,
 			acpidmar_softc->as_num_pci_domains);
 	}
 
@@ -1089,7 +1103,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	 * acpi table is full of horrific lies.
 	 */
 	if (domain == NULL) {
-		panic("%s: no domain for domain %d", pa->pa_domain);
+		panic("%s: no domain for domain %d", __func__, pa->pa_domain);
 	}
 
 	/* First, lookup direct parent in the tree */
