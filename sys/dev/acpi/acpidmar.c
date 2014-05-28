@@ -424,7 +424,10 @@ struct acpidmar_drhd_softc {
 	uint8_t					*ads_scopes;
 	bus_space_handle_t			 ads_memh;
 	uint64_t				 ads_addr;
+	uint64_t				 ads_cap;
+	uint64_t				 ads_ecap;
 	uint16_t				 ads_scopelen;
+	uint16_t				 ads_max_domains;
 	uint16_t				 ads_next_domain;
 	uint8_t	 				 ads_flags;
 	/* register tag. */
@@ -755,6 +758,21 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	if (bus_space_map(sc->as_memt, drhd->address, PAGE_SIZE, 0,
 	    &ads->ads_memh) != 0)
 		panic("%s: failed to map registers at %llx\n", drhd->address);
+	/* check sizes, the buffer could actuall be more than a page, then we
+	 * have to unmap and remap
+	 */
+	ads->ads_cap = bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
+	    DMAR_CAP_REG);
+	ads->ads_ecap = bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
+	    DMAR_ECAP_REG);
+	/*
+	 * This will truncate to 16 bits, so a 16 bit id will be 0.
+	 * note that we always preallocate the 0th domain for simplicity.
+	 * if we ever hit issues with this we should allocate an appropriately
+	 * sized  bitmap instead.
+	 */
+	ads->ads_max_domains = (uint16_t)(1 <<
+	    (4 + 2 * ((ads->ads_cap & DMAR_CAP_ND_MASK) >> DMAR_CAP_ND_SHIFT)));
 
 	ads->ads_flags = drhd->flags;
 	ads->ads_addr = drhd->address;
@@ -1040,7 +1058,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	 * enough to fit all child devices.
 	 */
 	drhd = entry->pte_drhd;
-	if (drhd->ads_next_domain == 0) {
+	if (drhd->ads_next_domain == drhd->ads_max_domains) {
 		panic("%s: domain count full!", __func__);
 	}
 	domain_id = drhd->ads_next_domain++;
