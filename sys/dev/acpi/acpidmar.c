@@ -44,14 +44,6 @@
 int	 acpidmar_match(struct device *, void *, void *);
 void	 acpidmar_attach(struct device *, struct device *, void *);
 
-struct cfattach acpidmar_ca = {
-	sizeof(struct device), acpidmar_match, acpidmar_attach
-};
-
-struct cfdriver acpidmar_cd = {
-	NULL, "acpidmar", DV_DULL
-};
-
 int	 acpidmar_validate(struct acpi_dmar *);
 int	 acpidmar_validate_devscope(caddr_t, uint8_t);
 int	 acpidmar_print(void *, const char *);
@@ -559,12 +551,21 @@ struct acpidmar_pci_domain {
 };
 
 struct acpidmar_softc {
+	struct device			 as_dev;
 	struct acpidmar_pci_domain	**as_domains;
 	uint16_t			 as_num_pci_domains;
 
 };
 
 struct acpidmar_softc	*acpidmar_softc;
+
+struct cfattach acpidmar_ca = {
+	sizeof(struct acpidmar_softc), acpidmar_match, acpidmar_attach
+};
+
+struct cfdriver acpidmar_cd = {
+	NULL, "acpidmar", DV_DULL
+};
 
 void	acpidmar_add_drhd(struct acpidmar_softc *, struct acpidmar_drhd *);
 void	acpidmar_add_rmrr(struct acpidmar_softc *, struct acpidmar_rmrr *);
@@ -705,10 +706,10 @@ acpidmar_add_rmrr(struct acpidmar_softc *sc, struct acpidmar_rmrr *rmrr)
 	TAILQ_INSERT_TAIL(&domain->apd_rmrrs, ars, ars_entry);
 }
 
-
 void
 acpidmar_attach(struct device *parent, struct device *self, void *aux)
 {
+	struct acpidmar_softc	*sc = (struct acpidmar_softc *)self;
 	struct acpi_attach_args	*aaa = aux;
 	struct acpi_dmar	*dmar = (struct acpi_dmar *)aaa->aaa_table;
 	caddr_t			 addr;
@@ -716,6 +717,7 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 	if (acpidmar_softc != NULL) {
 		panic("%s: we've already got one!", __func__);
 	}
+	acpidmar_softc = sc;
 
 	/* Sanity check table before we start building */
 	if (!acpidmar_validate(dmar)) {
@@ -724,9 +726,6 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 	}
 
 	printf(": checks out as valid\n");
-
-	acpidmar_softc = malloc(sizeof(*acpidmar_softc), M_DEVBUF,
-		M_WAITOK|M_ZERO);
 
 	addr = (caddr_t)(dmar + 1);
 
