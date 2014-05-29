@@ -701,6 +701,8 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	struct acpidmar_pci_domain	*domain;
 	struct vm_page			*pg;
 	struct pglist			 pglist;
+	uint32_t			 fr_offset, fr_num,  max_fr_offset;
+	uint32_t			 iotlb_offset, max_offset;
 	/*
 	 * we only handle growing this array and allocating here since the
 	 * specification specfiically states that
@@ -774,6 +776,32 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	ads->ads_max_domains = (uint16_t)(1 <<
 	    (4 + 2 * ((ads->ads_cap & DMAR_CAP_ND_MASK) >> DMAR_CAP_ND_SHIFT)));
 
+	/*
+	 * We have a couple of variable position registers in the register file.
+	 * check that they both fit in a page, else we have to enlarge our
+	 * mapping.
+	 */
+	fr_offset =  (ads->ads_cap & DMAR_CAP_FRO_MASK) >>
+	    DMAR_CAP_FRO_SHIFT;
+	fr_offset *= 16;
+	fr_num = ((ads->ads_cap & DMAR_CAP_NFR_MASK) >> DMAR_CAP_NFR_SHIFT) + 1;
+	max_fr_offset = fr_offset + fr_num * 16;
+
+	iotlb_offset = (ads->ads_ecap & DMAR_ECAP_IRO_MASK) >>
+	    DMAR_ECAP_IRO_SHIFT;
+	iotlb_offset += 16; /* end offset */
+	max_offset = max_fr_offset > iotlb_offset ? max_fr_offset :
+	    iotlb_offset;
+	if (max_offset > PAGE_SIZE) {
+		bus_space_unmap(acpidmar_softc->as_memt, ads->ads_memh,
+		    PAGE_SIZE);
+		if (bus_space_map(sc->as_memt, drhd->address,
+		    roundup(max_offset, PAGE_SIZE), 0, &ads->ads_memh) != 0)
+			panic("%s: failed to map registers at %llx (2)\n",
+			    drhd->address);
+	}
+
+
 	ads->ads_flags = drhd->flags;
 	ads->ads_addr = drhd->address;
 	ads->ads_scopes = (uint8_t *)drhd + sizeof(*drhd);
@@ -781,8 +809,6 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	ads->ads_next_domain = 1;
 	TAILQ_INIT(&ads->ads_domains);
 	TAILQ_INSERT_TAIL(&domain->apd_drhds, ads, ads_entry);
-
-	/* map registers */
 
 	/*
 	 * Allocate memory for the root context table.
