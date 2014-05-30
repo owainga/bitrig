@@ -504,6 +504,7 @@ struct pci_tree_entry {
 	TAILQ_ENTRY(pci_tree_entry)	 pte_entry;
 	struct pci_tree_entry		*pte_parent;
 	struct acpidmar_drhd_softc	*pte_drhd;
+	struct acpidmar_domain		*pte_domain;
 	pcitag_t			 pte_tag;
 	enum {
 		DMAR_PCI_ROOT,
@@ -526,6 +527,7 @@ struct pci_tree_bridge {
 	struct pci_tree_entry 		ptb_base;
 	TAILQ_HEAD(, pci_tree_entry)	ptb_children;
 	RB_ENTRY(pci_tree_bridge)	ptb_entry;
+	bool				ptb_is_pcie;
 };
 RB_HEAD(acpidmar_bridges, pci_tree_bridge);
 
@@ -1072,18 +1074,24 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	paddr_t				 highest_rmrr;
 	uint16_t			 domain_id;
 
+	drhd = entry->pte_drhd;
+
 	/*
-	 * XXX check if parent is a pcie-pci{,-x}  bridge (or any parent is)
-	 * in which case we inherit the domain of our parent and goto map_rmrrs.
-	 * with the reference count incremented.
+	 * Behind a bridge we must share domain with our parent.
+	 * We make an exception here if drhds differ.
 	 */
+	if (entry->pte_parent->pte_type == DMAR_PCI_BRIDGE &&
+	    entry->pte_drhd == entry->pte_parent->pte_drhd) {
+		ad = entry->pte_parent->pte_domain;
+		ad->ad_refs++;
+		goto program_domain;
+	}
 
 	/*
 	 * XXX handle wrapping? This may matter when we allow devices to move
 	 * domain for virtualisation, for now the domain counter should be
 	 * enough to fit all child devices.
 	 */
-	drhd = entry->pte_drhd;
 	if (drhd->ads_next_domain == drhd->ads_max_domains) {
 		panic("%s: domain count full!", __func__);
 	}
@@ -1092,6 +1100,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	/* make new domain struct. */
 	ad = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK | M_ZERO);
 	ad->ad_id = domain_id;
+	ad->ad_refs = 1;
 
 	/*
 	 * Pick appropriate rmrr devices. A reading of the spec implies that
@@ -1144,6 +1153,9 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	ad->ad_slptptr = TAILQ_FIRST(&pglist);
 	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
+
+program_domain:
+	entry->pte_domain = ad;
 	ctx_entry = context_for_pcitag(drhd, pc, entry->pte_tag);
 	{
 		int 			 bus, dev, func;
@@ -1154,9 +1166,34 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	}
 	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aspace->address_width,
 	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
+	/*
+	 * If parent is pci-{,-x} bridge we need to handle requrests from
+	 * current bus,0,0. if parent is pci-e we program the bridge device.
+	 * anything behind a bridge that doesn't have its own remapping hardware
+	 * ends up in the parent bridges domain.
+	 * This may have already happened, but we reprogram here just in case.
+	 */
+	if (entry->pte_parent->pte_type == DMAR_PCI_BRIDGE) {
+		struct pci_tree_bridge	*bridge;
+		pcitag_t		 tag;
+
+		bridge = (struct pci_tree_bridge *)entry->pte_parent ;
+		if (bridge->ptb_is_pcie) {
+			tag = bridge->ptb_base.pte_tag;
+		} else {
+			int			 bus;
+
+			pci_decompose_tag(pc, entry->pte_tag, &bus, NULL, NULL);
+			tag = pci_make_tag(pc, bus, 0, 0);
+		}
+		/* We already confirmed that drhd matched. */
+		ctx_entry = context_for_pcitag(drhd, pc, tag);
+		*ctx_entry = make_context_entry(ad->ad_id,
+		    ad->ad_aspace->address_width,
+		    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
+	}
 
 	/* note that device should not have translation switched on yet */
-/* map_rmrrs: */
 	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
 		struct sg_cookie	*cookie;
 		u_long			 result;
@@ -1245,7 +1282,6 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	struct acpidmar_pci_domain	*domain;
 	struct pci_tree_bridge		*parent;
 	struct pci_tree_entry		*entry;
-	bool				 is_bridge = false;
 	uint8_t				 curdepth;
 
 	
@@ -1308,8 +1344,10 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		TAILQ_INIT(&bridge->ptb_children);
 		entry = &bridge->ptb_base;
 		entry->pte_type = DMAR_PCI_BRIDGE;
-
-		is_bridge = true;
+		if (pci_get_capability(pc, pa->pa_tag, PCI_CAP_PCIEXPRESS,
+		    NULL, NULL)) {
+			bridge->ptb_is_pcie = true;
+		}
 	} else {
 		struct pci_tree_device	*dev;
 		/* if we fail this early in autoconf we are fucked */
@@ -1328,48 +1366,37 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	entry->pte_depth = curdepth;
 
 	acpidmar_find_drhd(pc, domain, entry);
-	if (entry->pte_type == DMAR_PCI_DEVICE) {
-		/*struct pci_tree_device	*dev = (struct pci_tree_device *)entry; */
-		acpidmar_create_domain(pc, domain, entry);
-		/* pa->pa_tag = dev->ptd_dmatag */
-	}
 	{
 		int bus, dev, func;
 		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
 		printf("%s: %d:%d:%d matches drhd at %llx\n",
 		    __func__, bus, dev, func, entry->pte_drhd->ads_addr);
 	}
+	acpidmar_create_domain(pc, domain, entry);
+
 	TAILQ_INSERT_TAIL(&parent->ptb_children, entry, pte_entry);
 
 	/*
 	 * If bridge we need to be able to look this up later for our
 	 * children.
 	 */
-	if (is_bridge) {
+	if (entry->pte_type == DMAR_PCI_BRIDGE) {
 		struct pci_tree_bridge	*bridge =
 			(struct pci_tree_bridge *)entry;
 
 		/* no concurrent access, so won't be any duplicates */
 		(void)RB_INSERT(acpidmar_bridges, &domain->apd_bridges, bridge);
+	} else {
+		/* set up tag for dma */
+		/*struct pci_tree_device	*dev = (struct pci_tree_device *)entry; */
+		/* pa->pa_tag = dev->ptd_dmatag */
 	}
 }
+
 /* bootstrapping - how to handle gpu enablement. */
-
-/* allocate context page directory page.  enter into root entry*/
-
-/* get domain width from capability register. */
-/* don't need extented context entries (no PASID) */
-/*
- * address width must be 39 bits (001 in AW field) since some RMRRs don't fit
- * otherwise.
- * in practice though we can force it to be the lowest 4gig
- */
  /* check extended capability register for passthrough -> can put gpu as pass
   * through for now
   */
-
-
-/* dmar -> enabbled, next domain, number of domains? pointer to root context.*/
 
 
 #define PTE_READ	(1<<0)
