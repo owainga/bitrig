@@ -1281,6 +1281,14 @@ acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
 		flags |= BUS_DMA_READ | BUS_DMA_WRITE;
 	}
 
+	/*
+	 * If we don't support zero length reads then permit reads for
+	 * write posting purposes.
+	 */
+	if ((flags & (BUS_DMA_READ|BUS_DMA_WRITE)) == BUS_DMA_WRITE &&
+	    (ad->ad_parent->ads_cap & DMAR_CAP_ZLR) == 0)
+		flags |= BUS_DMA_READ;
+
 	ad->ad_aspace->enter_page(ad, ad->ad_root_entry, va, pa, flags);
 }
 
@@ -1545,13 +1553,25 @@ acpidmar_2level_get_pt(struct acpidmar_domain *ad, uint64_t pd[512],
 	pt_phys = *pde & ~PAGE_MASK;
 
 	if (pt_phys == 0) {
+		uint64_t	pde_val;
+
 		if (!allocate)
 			return (NULL);
 		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
 			return (NULL);
+
 		pt_phys = VM_PAGE_TO_PHYS(pg);
-		/* program pde */
+		pde_val = pt_phys;
+		if (flags & BUS_DMA_READ)
+			pde_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			pde_val |= PTE_WRITE;
+		*pde = pde_val;
 	} else {
+		if ((*pde & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*pde |= PTE_READ;
+		if ((*pde & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*pde |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pt_phys);
 	}
 	return ((uint64_t *)pmap_map_direct(pg));
@@ -1577,17 +1597,10 @@ acpidmar_enter_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
 
 	pte = acpidmar_2level_get_pte(pt, vaddr);
 
-	/*
-	 * If hardware doesn't support zero length reads we allow write to also
-	 * handle read for write posting.
-	 */
 	if (flags & BUS_DMA_READ)
 		pteflags |= PTE_READ;
 	if (flags & BUS_DMA_WRITE)
 		pteflags |= PTE_WRITE;
-	if ((flags & (BUS_DMA_READ|BUS_DMA_WRITE)) == BUS_DMA_WRITE &&
-	    (ad->ad_parent->ads_cap & DMAR_CAP_ZLR) == 0)
-		pteflags |= PTE_READ;
 
 	/* invalid to ask for nothing */
 	KASSERT(pteflags != 0);
@@ -1630,14 +1643,24 @@ acpidmar_3level_get_pd(struct acpidmar_domain *ad, uint64_t pdp[512],
 	pd_phys = *pdpe & ~PAGE_MASK;
 
 	if (pd_phys == 0) {
+		uint64_t    pdpe_val;
 		if (!allocate)
 			return (NULL);
 		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
 			return (NULL);
 
 		pd_phys = VM_PAGE_TO_PHYS(pg);
-		/* program pdpe */
+		pdpe_val = pd_phys;
+		if (flags & BUS_DMA_READ)
+			pdpe_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			pdpe_val |= PTE_WRITE;
+		*pdpe = pdpe_val;
 	} else {
+		if ((*pdpe & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*pdpe |= PTE_READ;
+		if ((*pdpe & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*pdpe |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pd_phys);
 	}
 
@@ -1686,14 +1709,25 @@ acpidmar_4level_get_pdp(struct acpidmar_domain *ad, uint64_t pm4l[512],
 	pdp_phys = *pm4le & ~PAGE_MASK;
 
 	if (pdp_phys == 0) {
+		uint64_t    pm4le_val;
+
 		if (!allocate)
 			return (NULL);
 		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
 			return (NULL);
 
 		pdp_phys = VM_PAGE_TO_PHYS(pg);
-		/* program pdpe */
+		pm4le_val = pdp_phys;
+		if (flags & BUS_DMA_READ)
+			pm4le_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			pm4le_val |= PTE_WRITE;
+		*pm4le = pm4le_val;
 	} else {
+		if ((*pm4le & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*pm4le |= PTE_READ;
+		if ((*pm4le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*pm4le |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pdp_phys);
 	}
 	return ((uint64_t *)pmap_map_direct(pg));
@@ -1740,14 +1774,25 @@ acpidmar_5level_get_pm4l(struct acpidmar_domain *ad, uint64_t pm5l[512],
 	pm4l_phys = *pm5le & ~PAGE_MASK;
 
 	if (pm4l_phys == 0) {
+		uint64_t	pm5le_val;
+
 		if (!allocate)
 			return (NULL);
 		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
 			return (NULL);
 
 		pm4l_phys = VM_PAGE_TO_PHYS(pg);
-		/* program pdpe */
+		pm5le_val = pm4l_phys;
+		if (flags & BUS_DMA_READ)
+			pm5le_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			pm5le_val |= PTE_WRITE;
+		*pm5le = pm5le_val;
 	} else {
+		if ((*pm5le & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*pm5le |= PTE_READ;
+		if ((*pm5le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*pm5le |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pm4l_phys);
 	}
 	return ((uint64_t *)pmap_map_direct(pg));
@@ -1794,14 +1839,24 @@ acpidmar_6level_get_pm5l(struct acpidmar_domain *ad, uint64_t pm6l[512],
 	pm5l_phys = *pm6le & ~PAGE_MASK;
 
 	if (pm5l_phys == 0) {
+		uint64_t	pm6le_val;
 		if (!allocate)
 			return (NULL);
 		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
 			return (NULL);
 
 		pm5l_phys = VM_PAGE_TO_PHYS(pg);
-		/* program pdpe */
+		pm6le_val = pm5l_phys;
+		if (flags & BUS_DMA_READ)
+			pm6le_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			pm6le_val |= PTE_WRITE;
+		*pm6le = pm6le_val;
 	} else {
+		if ((*pm6le & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*pm6le |= PTE_READ;
+		if ((*pm6le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*pm6le |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pm5l_phys);
 	}
 
