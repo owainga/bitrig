@@ -346,23 +346,33 @@ struct context_table {
 	struct context_entry entries[4096/16];
 };
 
-int acpidmar_enter_2level(void *, bus_addr_t, paddr_t, int);
-int acpidmar_remove_2level(void *, bus_addr_t);
-int acpidmar_enter_3level(void *, bus_addr_t, paddr_t, int);
-int acpidmar_remove_3level(void *, bus_addr_t);
-int acpidmar_enter_4level(void *, bus_addr_t, paddr_t, int);
-int acpidmar_remove_4level(void *, bus_addr_t);
-int acpidmar_enter_5level(void *, bus_addr_t, paddr_t, int);
-int acpidmar_remove_5level(void *, bus_addr_t);
-int acpidmar_enter_6level(void *, bus_addr_t, paddr_t, int);
-int acpidmar_remove_6level(void *, bus_addr_t);
+
+struct acpidmar_domain;
 
 struct acpidmar_address_space {
 	uint64_t	address_size;
 	uint8_t		address_width; /* for hardware */
-	int		(*enter_page)(void *, bus_addr_t, paddr_t, int);
-	int		(*remove_page)(void *, bus_addr_t);
+	int		(*enter_page)(struct acpidmar_domain *, void *,
+			    bus_addr_t, paddr_t, int);
+	void		(*remove_page)(struct acpidmar_domain *, void *,
+			    bus_addr_t);
 };
+
+int	acpidmar_enter_2level(struct acpidmar_domain *, void *, bus_addr_t,
+	    paddr_t, int);
+void	acpidmar_remove_2level(struct acpidmar_domain *, void *, bus_addr_t);
+int	acpidmar_enter_3level(struct acpidmar_domain *, void *, bus_addr_t,
+	    paddr_t, int);
+void	acpidmar_remove_3level(struct acpidmar_domain *, void *, bus_addr_t);
+int	acpidmar_enter_4level(struct acpidmar_domain *, void *, bus_addr_t,
+	    paddr_t, int);
+void	acpidmar_remove_4level(struct acpidmar_domain *, void *, bus_addr_t);
+int	acpidmar_enter_5level(struct acpidmar_domain *, void *, bus_addr_t,
+	    paddr_t, int);
+void	acpidmar_remove_5level(struct acpidmar_domain *, void *, bus_addr_t);
+int	acpidmar_enter_6level(struct acpidmar_domain *, void *, bus_addr_t,
+	    paddr_t, int);
+void	acpidmar_remove_6level(struct acpidmar_domain *, void *, bus_addr_t);
 
 struct acpidmar_address_space acpidmar_address_spaces[] = {
 	{
@@ -430,8 +440,6 @@ struct acpidmar_drhd_softc {
 	uint16_t				 ads_max_domains;
 	uint16_t				 ads_next_domain;
 	uint8_t	 				 ads_flags;
-	/* register tag. */
-	/* register handle */
 
 	/* root table of paddrs for contexts for this remapper. */
 	struct root_table			*ads_rtable;
@@ -481,6 +489,7 @@ context_for_pcitag(struct acpidmar_drhd_softc *drhd,
 		pg = TAILQ_FIRST(&pglist);
 
 		*root_entry = make_root_entry(VM_PAGE_TO_PHYS(pg));
+		/* XXX flush buffers etc. */
 
 		KASSERT(root_entry_is_valid(root_entry));
 	} 
@@ -695,6 +704,7 @@ void	acpidmar_find_drhd(pci_chipset_tag_t, struct acpidmar_pci_domain *,
 	    struct pci_tree_entry *);
 void	acpidmar_create_domain(pci_chipset_tag_t, struct acpidmar_pci_domain *,
 	    struct pci_tree_entry *);
+struct vm_page *acpidmar_alloc_page(struct acpidmar_domain *, int);
 
 void
 acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
@@ -827,6 +837,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	ads->ads_rtable = (struct root_table *)pmap_map_direct(pg);
 
 	/* program root context */
+	/* flush cache etc */
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
@@ -1192,6 +1203,7 @@ program_domain:
 		    ad->ad_aspace->address_width,
 		    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
 	}
+	/* XXX flush writer buffers and tlbs */
 
 	/* note that device should not have translation switched on yet */
 	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
@@ -1244,27 +1256,40 @@ program_domain:
 			for (addr = rmrr->ars_addr; addr <= rmrr->ars_limaddr;
 			    addr += PAGE_SIZE) {
 				if ((ret = ad->ad_aspace->enter_page(
-				    ad->ad_root_entry, (bus_addr_t)addr, addr,
-				    BUS_DMA_WAITOK | BUS_DMA_READ |
+				    ad, ad->ad_root_entry, (bus_addr_t)addr,
+				    addr, BUS_DMA_WAITOK | BUS_DMA_READ |
 				    BUS_DMA_WRITE)) != 0) {
 					panic("%s: can't enter rmrr %d",
 					    __func__, ret);
 				}
 			}
 		}
+		/* Flush tlbs */
 	}
 }
 
 void
 acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
 {
-	panic("%s: implement me", __func__);
+	struct acpidmar_domain	*ad = hdl;
+
+	/*
+	 * Externally these flags determine if solely read or write are needed.
+	 * we also use them to track required permissions.
+	 */
+	if ((flags & (BUS_DMA_READ|BUS_DMA_WRITE)) == 0) {
+		flags |= BUS_DMA_READ | BUS_DMA_WRITE;
+	}
+
+	ad->ad_aspace->enter_page(ad, ad->ad_root_entry, va, pa, flags);
 }
 
 void
-acpidmar_domain_unbind_page(void *hdl, bus_addr_t pa)
+acpidmar_domain_unbind_page(void *hdl, bus_addr_t va)
 {
-	panic("%s: implement me", __func__);
+	struct acpidmar_domain	*ad = hdl;
+
+	ad->ad_aspace->remove_page(ad, ad->ad_root_entry, va);
 }
 
 void
@@ -1460,7 +1485,7 @@ make_slpde(paddr_t slpt)
 #define PTE_EMT_MASK	0x7ULL
 #define PTE_EMT_SHIFT	3
 //static inline uint64_t
-//make_slpte(paddr_t page)
+//make_slpte(paddr_t page, uint64_t flags)
 //{
 //	if (page & 0xfff)
 //		panic("%s: unaligned page %llx", __func__, page);
@@ -1471,64 +1496,340 @@ make_slpde(paddr_t slpt)
 /* inlines to select the right root context for a tag */
 /* inlines to select the domain */
 /* inlines to select the right pte */
-
-
-int
-acpidmar_enter_2level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+/*
+ * Allocate a page for a levelled page table entry. Eventually this will do
+ * caching for BUS_DMA_ALLOCNOW allocations.
+ */
+struct vm_page *
+acpidmar_alloc_page(struct acpidmar_domain *ad, int flags)
 {
-	return (0);
+	struct pglist	pglist;
+	int		wait;
+
+	if (flags & BUS_DMA_NOWAIT) {
+		wait = UVM_PLA_NOWAIT;
+	} else {
+		wait = UVM_PLA_WAITOK;
+	}
+
+	TAILQ_INIT(&pglist);
+	if (uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist, 1,
+	    wait | UVM_PLA_ZERO) != 0) {
+		return (NULL);
+	}
+	return (TAILQ_FIRST(&pglist));
+}
+
+/*
+ * The following enter and remove fuctions work in a layered fashion.
+ * for example enter_3level makes sure that the 2nd level is allocated, fills
+ * in the entry in the third level then calls enter_2level.
+ */
+
+
+#define PDE_ADDR_SHIFT	(12+9)
+#define PDE_ADDR_MASK	(0x1ffULL<<PDE_ADDR_SHIFT)
+static inline uint64_t *
+acpidmar_2level_get_pt(struct acpidmar_domain *ad, uint64_t pd[512],
+   bus_addr_t vaddr, bool allocate, int flags)
+{
+	uint64_t	*pde;
+	paddr_t		 pt_phys;
+	struct vm_page	*pg;
+
+	pde = &pd[(vaddr & PDE_ADDR_MASK) >> PDE_ADDR_SHIFT];
+
+	/* we don't currently handle large pages. */
+	KASSERT((*pde & SLPDE_2MBPAGE) == 0);
+
+	pt_phys = *pde & ~PAGE_MASK;
+
+	if (pt_phys == 0) {
+		if (!allocate)
+			return (NULL);
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (NULL);
+		pt_phys = VM_PAGE_TO_PHYS(pg);
+		/* program pde */
+	} else {
+		pg = PHYS_TO_VM_PAGE(pt_phys);
+	}
+	return ((uint64_t *)pmap_map_direct(pg));
+}
+
+#define PTE_ADDR_SHIFT	(12)
+#define PTE_ADDR_MASK	(0x1ffULL<<PTE_ADDR_SHIFT)
+static inline uint64_t *
+acpidmar_2level_get_pte(uint64_t pt[512], bus_addr_t vaddr)
+{
+	return (&pt[(vaddr & PTE_ADDR_MASK) >> PTE_ADDR_SHIFT]);
 }
 
 int
-acpidmar_remove_2level(void *ctx, bus_addr_t vaddr)
+acpidmar_enter_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
+    paddr_t paddr, int flags)
 {
+	uint64_t	*pt, *pte, *pd = ctx;
+	uint64_t	 pteflags = 0;
+
+	if (!(pt = acpidmar_2level_get_pt(ad, pd, vaddr, true, flags)))
+		return (ENOMEM);
+
+	pte = acpidmar_2level_get_pte(pt, vaddr);
+
+	/*
+	 * If hardware doesn't support zero length reads we allow write to also
+	 * handle read for write posting.
+	 */
+	if (flags & BUS_DMA_READ)
+		pteflags |= PTE_READ;
+	if (flags & BUS_DMA_WRITE)
+		pteflags |= PTE_WRITE;
+	if ((flags & (BUS_DMA_READ|BUS_DMA_WRITE)) == BUS_DMA_WRITE &&
+	    (ad->ad_parent->ads_cap & DMAR_CAP_ZLR) == 0)
+		pteflags |= PTE_READ;
+
+	/* invalid to ask for nothing */
+	KASSERT(pteflags != 0);
+
+	*pte = paddr | pteflags;
+	
 	return (0);
 }
 
-int
-acpidmar_enter_3level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+void
+acpidmar_remove_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
 {
-	return (0);
+	uint64_t	*pt, *pte, *pd = ctx;
+
+	if (!(pt = acpidmar_2level_get_pt(ad, pd, vaddr, false, 0)))
+		return;
+	pte = acpidmar_2level_get_pte(pt, vaddr);
+	*pte = 0;
+
+	if (ctx == ad->ad_root_entry)
+		return;
+	/* check to see if pt is now empty, if so free page */
+}
+
+#define PDPE_ADDR_SHIFT	(12+9+9)
+#define PDPE_ADDR_MASK	(0x1ffULL<<PDPE_ADDR_SHIFT)
+static inline uint64_t *
+acpidmar_3level_get_pd(struct acpidmar_domain *ad, uint64_t pdp[512],
+    bus_addr_t vaddr, bool allocate, int flags)
+{
+	struct vm_page	 *pg;
+	uint64_t	 *pdpe;
+	paddr_t		  pd_phys;
+
+	pdpe = &pdp[(vaddr & PDPE_ADDR_MASK) >> PDPE_ADDR_SHIFT];
+
+	/* we don't currently handle large pages. */
+	KASSERT((*pdpe & SLPDPE_1GBPAGE) == 0);
+
+	pd_phys = *pdpe & ~PAGE_MASK;
+
+	if (pd_phys == 0) {
+		if (!allocate)
+			return (NULL);
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (NULL);
+
+		pd_phys = VM_PAGE_TO_PHYS(pg);
+		/* program pdpe */
+	} else {
+		pg = PHYS_TO_VM_PAGE(pd_phys);
+	}
+
+	return ((uint64_t *)pmap_map_direct(pg));
 }
 
 int
-acpidmar_remove_3level(void *ctx, bus_addr_t vaddr)
+acpidmar_enter_3level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
+    paddr_t paddr, int flags)
 {
-	return (0);
+	uint64_t	 *pd, *pdp = ctx;
+
+	if (!(pd = acpidmar_3level_get_pd(ad, pdp, vaddr, true, flags)))
+		return (ENOMEM);
+
+	return (acpidmar_enter_3level(ad, pd, vaddr, paddr, flags));
+}
+
+void
+acpidmar_remove_3level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
+{
+	uint64_t	 *pd, *pdp = ctx;
+
+	if (!(pd = acpidmar_3level_get_pd(ad, pdp, vaddr, false, 0)))
+		return;
+
+	acpidmar_remove_3level(ad, pd, vaddr);
+	if (ctx == ad->ad_root_entry)
+		return;
+	/* check if pd is unused and if so nuke it */
+}
+
+#define PML4E_ADDR_SHIFT	(12+9+9+9)
+#define PML4E_ADDR_MASK		(0x1ffULL<<PML4E_ADDR_SHIFT)
+
+static inline uint64_t *
+acpidmar_4level_get_pdp(struct acpidmar_domain *ad, uint64_t pm4l[512],
+    bus_addr_t vaddr, bool allocate, int flags)
+{
+	uint64_t 	*pm4le;
+	paddr_t		 pdp_phys;
+	struct vm_page	*pg;
+
+	pm4le = &pm4l[(vaddr & PML4E_ADDR_MASK) >> PML4E_ADDR_SHIFT];
+
+	pdp_phys = *pm4le & ~PAGE_MASK;
+
+	if (pdp_phys == 0) {
+		if (!allocate)
+			return (NULL);
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (NULL);
+
+		pdp_phys = VM_PAGE_TO_PHYS(pg);
+		/* program pdpe */
+	} else {
+		pg = PHYS_TO_VM_PAGE(pdp_phys);
+	}
+	return ((uint64_t *)pmap_map_direct(pg));
 }
 
 int
-acpidmar_enter_4level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+acpidmar_enter_4level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
+    paddr_t paddr, int flags)
 {
-	return (0);
+	uint64_t	*pdp, *pm4l = ctx;
+
+	if (!(pdp = acpidmar_4level_get_pdp(ad, pm4l, vaddr, true, flags)))
+		return (ENOMEM);
+
+	return (acpidmar_enter_3level(ad, pdp, vaddr, paddr, flags));
+}
+
+void
+acpidmar_remove_4level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
+{
+	uint64_t	*pdp, *pm4l = ctx;
+
+	if (!(pdp = acpidmar_4level_get_pdp(ad, pm4l, vaddr, false, 0)))
+		return;
+
+	acpidmar_remove_3level(ad, pdp, vaddr);
+	if (ctx == ad->ad_root_entry)
+		return;
+	/* check if pdp is unused and if so nuke it */
+}
+
+#define PML5E_ADDR_SHIFT	(12+9+9+9+9)
+#define PML5E_ADDR_MASK		(0x1ffULL<<PML5E_ADDR_SHIFT)
+static inline uint64_t *
+acpidmar_5level_get_pm4l(struct acpidmar_domain *ad, uint64_t pm5l[512],
+    bus_addr_t vaddr, bool allocate, int flags)
+{
+	struct vm_page	*pg;
+	uint64_t	*pm5le;
+	paddr_t		 pm4l_phys;
+
+	pm5le = &pm5l[(vaddr & PML5E_ADDR_MASK) >> PML5E_ADDR_SHIFT];
+
+	pm4l_phys = *pm5le & ~PAGE_MASK;
+
+	if (pm4l_phys == 0) {
+		if (!allocate)
+			return (NULL);
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (NULL);
+
+		pm4l_phys = VM_PAGE_TO_PHYS(pg);
+		/* program pdpe */
+	} else {
+		pg = PHYS_TO_VM_PAGE(pm4l_phys);
+	}
+	return ((uint64_t *)pmap_map_direct(pg));
 }
 
 int
-acpidmar_remove_4level(void *ctx, bus_addr_t vaddr)
+acpidmar_enter_5level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
+    paddr_t paddr, int flags)
 {
-	return (0);
+	uint64_t	*pm4l, *pm5l = ctx;
+
+	if (!(pm4l = acpidmar_5level_get_pm4l(ad, pm5l, vaddr, true, flags)))
+		return (ENOMEM);
+
+	return (acpidmar_enter_4level(ad, pm4l, vaddr, paddr, flags));
+}
+
+void
+acpidmar_remove_5level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
+{
+	uint64_t	*pm5le, *pm5l = ctx;
+
+	if (!(pm5le = acpidmar_5level_get_pm4l(ad, pm5l, vaddr, false, 0)))
+		return;
+
+	acpidmar_remove_4level(ad, pm5l, vaddr);
+	if (ctx == ad->ad_root_entry)
+		return;
+	/* check if pm4l is unused and if so nuke it */
+}
+
+#define PML6E_ADDR_SHIFT	(12+9+9+9+9+9)
+#define PML6E_ADDR_MASK		(0x1ffULL<<PML6E_ADDR_SHIFT)
+static inline uint64_t *
+acpidmar_6level_get_pm5l(struct acpidmar_domain *ad, uint64_t pm6l[512],
+    bus_addr_t vaddr, bool allocate, int flags)
+{
+	struct vm_page	*pg;
+	uint64_t	*pm6le;
+	paddr_t		 pm5l_phys;
+
+	pm6le = &pm6l[(vaddr & PML6E_ADDR_MASK) >> PML6E_ADDR_SHIFT];
+
+	pm5l_phys = *pm6le & ~PAGE_MASK;
+
+	if (pm5l_phys == 0) {
+		if (!allocate)
+			return (NULL);
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (NULL);
+
+		pm5l_phys = VM_PAGE_TO_PHYS(pg);
+		/* program pdpe */
+	} else {
+		pg = PHYS_TO_VM_PAGE(pm5l_phys);
+	}
+
+	return ((uint64_t *)pmap_map_direct(pg));
 }
 
 int
-acpidmar_enter_5level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
+acpidmar_enter_6level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
+    paddr_t paddr, int flags)
 {
-	return (0);
+	uint64_t	*pm5l, *pm6l = ctx;
+
+	if (!(pm5l = acpidmar_6level_get_pm5l(ad, pm6l, vaddr, true, flags)))
+		return (ENOMEM);
+
+	return (acpidmar_enter_5level(ad, pm5l, vaddr, paddr, flags));
 }
 
-int
-acpidmar_remove_5level(void *ctx, bus_addr_t vaddr)
+void
+acpidmar_remove_6level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
 {
-	return (0);
-}
+	uint64_t	*pm5l, *pm6l = ctx;
 
-int
-acpidmar_enter_6level(void *ctx, bus_addr_t vaddr, paddr_t paddr, int flags)
-{
-	return (0);
-}
+	if (!(pm5l = acpidmar_6level_get_pm5l(ad, pm6l, vaddr, false, 0)))
+		return;
 
-int
-acpidmar_remove_6level(void *ctx, bus_addr_t vaddr)
-{
-	return (0);
+	acpidmar_remove_5level(ad, pm5l, vaddr);
+	if (ctx == ad->ad_root_entry)
+		return;
+	/* check if entry is unused and if so nuke it */
 }
