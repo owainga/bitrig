@@ -425,6 +425,11 @@ void acpidmar_domain_bind_page(void *, bus_addr_t, paddr_t, int);
 void acpidmar_domain_unbind_page(void *, bus_addr_t);
 void acpidmar_domain_flush_tlb(void *);
 
+enum ctx_flush_type {
+	CTX_FLUSH_GLOBAL,
+	CTX_FLUSH_DOMAIN,
+	CTX_FLUSH_DEVICE,
+};
 /*
  * acpidmar_drhd_softc encapsulates all of the state required to handle a single
  * remapping device.
@@ -433,6 +438,7 @@ struct acpidmar_drhd_softc {
 	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
 	uint8_t					*ads_scopes;
 	bus_space_handle_t			 ads_memh;
+	struct mutex				 ads_reg_lock;
 	uint64_t				 ads_addr;
 	uint64_t				 ads_cap;
 	uint64_t				 ads_ecap;
@@ -444,7 +450,22 @@ struct acpidmar_drhd_softc {
 	/* root table of paddrs for contexts for this remapper. */
 	struct root_table			*ads_rtable;
 	TAILQ_HEAD(,acpidmar_domain)		 ads_domains;
+	void				 	 (*ads_flush_tlb)(
+						     struct acpidmar_drhd_softc *,
+						     struct acpidmar_domain *);
+	void				 	 (*ads_flush_ctx)(
+						     struct acpidmar_drhd_softc *,
+						     enum ctx_flush_type,
+						     uint16_t, uint16_t,
+						     uint8_t);
 };
+
+void	acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
+	    struct acpidmar_domain *ad);
+void	acpidmar_flush_ctx_register(struct acpidmar_drhd_softc *,
+	    enum ctx_flush_type type, uint16_t domain_id, uint16_t  source,
+	    uint8_t function_mask);
+
 struct context_entry	*context_for_pcitag(struct acpidmar_drhd_softc *,
 			     pci_chipset_tag_t, pcitag_t);
 
@@ -487,9 +508,14 @@ context_for_pcitag(struct acpidmar_drhd_softc *drhd,
 		(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
 			1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 		pg = TAILQ_FIRST(&pglist);
+		/* flush cache for page if !ecap coherent
+		 * (to make sure zeroed)
+		 */
 
 		*root_entry = make_root_entry(VM_PAGE_TO_PHYS(pg));
-		/* XXX flush buffers etc. */
+		/* flush cache for root table if !ecap coherent */
+		/* we don't flush context cache here, since the caller will
+		update the context entry and do the full flush. */
 
 		KASSERT(root_entry_is_valid(root_entry));
 	} 
@@ -657,13 +683,16 @@ struct acpidmar_pci_domain {
 #define DMAR_DTADDR_RTT	(1ULL<<11) /* 1 for extended, 0 for normal */
 
 /* 10.4.7 Context Command Register. */
-#define DMAR_CCMD__REG	0x28
+#define DMAR_CCMD_REG	0x28
 #define DMAR_CCMD_ICC		(1ULL<<63)
 #define DMAR_CCMD_ICC		(1ULL<<63)
 #define DMAR_CCMD_CIRG_MASK	(0x3ULL)
 #define DMAR_CCMD_CIRG_SHIFT	61
 #define DMAR_CCMD_CAIG_MASK	(0x3ULL)
 #define DMAR_CCMD_CAIG_SHIFT	59
+#define DMAR_CCMD_INVAL_GLOBAL		(1ULL)
+#define DMAR_CCMD_INVAL_DOMAIN		(2ULL)
+#define DMAR_CCMD_INVAL_DEVICE		(3ULL)
 #define DMAR_CCMD_FM_MASK	(0x3ULL)
 #define DMAR_CCMD_FM_SHIFT	32
 #define DMAR_CCMD_SID_MASK	(0xffffULL)
@@ -768,11 +797,12 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	printf("\n");
 
 	ads = malloc(sizeof(*ads), M_DEVBUF, M_WAITOK|M_ZERO);
+	mtx_init(&ads->ads_reg_lock, IPL_HIGH);
 
 	if (bus_space_map(sc->as_memt, drhd->address, PAGE_SIZE, 0,
 	    &ads->ads_memh) != 0)
 		panic("%s: failed to map registers at %llx\n", drhd->address);
-	/* check sizes, the buffer could actuall be more than a page, then we
+	/* check sizes, the buffer could actually be more than a page, then we
 	 * have to unmap and remap
 	 */
 	ads->ads_cap = bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
@@ -819,6 +849,8 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	ads->ads_scopes = (uint8_t *)drhd + sizeof(*drhd);
 	ads->ads_scopelen  = drhd->length - sizeof(*drhd);
 	ads->ads_next_domain = 1;
+	ads->ads_flush_tlb = acpidmar_flush_tlb_register;
+	ads->ads_flush_ctx = acpidmar_flush_ctx_register;
 	TAILQ_INIT(&ads->ads_domains);
 	TAILQ_INSERT_TAIL(&domain->apd_drhds, ads, ads_entry);
 
@@ -834,10 +866,12 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	pg = TAILQ_FIRST(&pglist);
+	/* flush cache to make sure it is zero if !coherent */
 	ads->ads_rtable = (struct root_table *)pmap_map_direct(pg);
 
 	/* program root context */
-	/* flush cache etc */
+	/* ordered global invalidate of context cache, pasid cache (not yet),
+	 * and IOTLB */
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
@@ -1148,6 +1182,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		 * address space.
 		 */
 		ad->ad_aspace = &acpidmar_address_spaces[i];
+		break;
 	}
 
 	/*
@@ -1164,6 +1199,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
 	ad->ad_slptptr = TAILQ_FIRST(&pglist);
 	ad->ad_root_entry = (void *)pmap_map_direct(ad->ad_slptptr);
+	/* flush cache to ensure zeroed */
 
 program_domain:
 	entry->pte_domain = ad;
@@ -1177,6 +1213,23 @@ program_domain:
 	}
 	*ctx_entry = make_context_entry(ad->ad_id, ad->ad_aspace->address_width,
 	    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
+	if (drhd->ads_cap & DMAR_CAP_CM) {
+		int 			 bus, dev, func;
+		uint16_t		 source_id;
+
+		pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+
+		source_id = bus << 16 | dev << 3 | func;
+		/*
+		 * Not present to present mapping, we must flush domain 0
+		 * to flush any not-present entries.
+		 */
+		drhd->ads_flush_ctx(drhd, CTX_FLUSH_DEVICE, 0, source_id, 0);
+		drhd->ads_flush_tlb(drhd, NULL); /* XXX Global for now */
+	} else {
+		/* flush write buffer */
+	}
+
 	/*
 	 * If parent is pci-{,-x} bridge we need to handle requrests from
 	 * current bus,0,0. if parent is pci-e we program the bridge device.
@@ -1300,10 +1353,16 @@ acpidmar_domain_unbind_page(void *hdl, bus_addr_t va)
 	ad->ad_aspace->remove_page(ad, ad->ad_root_entry, va);
 }
 
+/*
+ * XXX need the region we are flushing the tlb for so that we can do 
+ * page selective invalidations eventually.
+ */
 void
 acpidmar_domain_flush_tlb(void *hdl)
 {
-	panic("%s: implement me", __func__);
+	struct acpidmar_domain	*ad = hdl;
+
+	ad->ad_parent->ads_flush_tlb(ad->ad_parent, ad);
 }
 
 
@@ -1525,6 +1584,7 @@ acpidmar_alloc_page(struct acpidmar_domain *ad, int flags)
 	    wait | UVM_PLA_ZERO) != 0) {
 		return (NULL);
 	}
+	/* flush cache if not coherent */
 	return (TAILQ_FIRST(&pglist));
 }
 
@@ -1567,6 +1627,7 @@ acpidmar_2level_get_pt(struct acpidmar_domain *ad, uint64_t pd[512],
 		if (flags & BUS_DMA_WRITE)
 			pde_val |= PTE_WRITE;
 		*pde = pde_val;
+		/* cache flushing? */
 	} else {
 		if ((*pde & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pde |= PTE_READ;
@@ -1656,12 +1717,14 @@ acpidmar_3level_get_pd(struct acpidmar_domain *ad, uint64_t pdp[512],
 		if (flags & BUS_DMA_WRITE)
 			pdpe_val |= PTE_WRITE;
 		*pdpe = pdpe_val;
+		/* cache flushing? */
 	} else {
 		if ((*pdpe & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pdpe |= PTE_READ;
 		if ((*pdpe & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
 			*pdpe |= PTE_WRITE;
 		pg = PHYS_TO_VM_PAGE(pd_phys);
+		/* cache flushing? */
 	}
 
 	return ((uint64_t *)pmap_map_direct(pg));
@@ -1723,6 +1786,7 @@ acpidmar_4level_get_pdp(struct acpidmar_domain *ad, uint64_t pm4l[512],
 		if (flags & BUS_DMA_WRITE)
 			pm4le_val |= PTE_WRITE;
 		*pm4le = pm4le_val;
+		/* cache flushing? */
 	} else {
 		if ((*pm4le & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pm4le |= PTE_READ;
@@ -1788,6 +1852,7 @@ acpidmar_5level_get_pm4l(struct acpidmar_domain *ad, uint64_t pm5l[512],
 		if (flags & BUS_DMA_WRITE)
 			pm5le_val |= PTE_WRITE;
 		*pm5le = pm5le_val;
+		/* cache flushing? */
 	} else {
 		if ((*pm5le & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pm5le |= PTE_READ;
@@ -1852,6 +1917,7 @@ acpidmar_6level_get_pm5l(struct acpidmar_domain *ad, uint64_t pm6l[512],
 		if (flags & BUS_DMA_WRITE)
 			pm6le_val |= PTE_WRITE;
 		*pm6le = pm6le_val;
+		/* cache flushing? */
 	} else {
 		if ((*pm6le & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pm6le |= PTE_READ;
@@ -1887,4 +1953,97 @@ acpidmar_remove_6level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
 	if (ctx == ad->ad_root_entry)
 		return;
 	/* check if entry is unused and if so nuke it */
+}
+
+#define DMAR_IOTLB_INVALIDATE	(1ULL<<63)
+#define DMAR_IOTLB_IIRG_MASK	(2ULL)
+#define DMAR_IOTLB_IIRG_SHIFT	(60)
+#define DMAR_IOTLB_IAIG_MASK	(2ULL)
+#define DMAR_IOTLB_IAIG_SHIFT	(58)
+#define DMAR_IOTLB_INVAL_GLOBAL		(1ULL)
+#define DMAR_IOTLB_INVAL_DOMAIN		(2ULL)
+#define DMAR_IOTLB_INVAL_DOMAIN_PAGE	(3ULL)
+#define DMAR_IOTLB_DR		(1ULL<<49)
+#define DMAR_IOTLB_DW		(1ULL<<48)
+#define DMAR_IOTLB_DID_MASK	(0xffffULL)
+#define DMAR_IOTLB_DID_SHIFT	(58)
+void
+acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
+    struct acpidmar_domain *ad)
+{
+	bus_size_t		 iotlb_offset;
+	uint64_t		 val;
+
+	iotlb_offset = ((ad->ad_parent->ads_ecap & DMAR_ECAP_IRO_MASK) >>
+		DMAR_ECAP_IRO_SHIFT) * 16;
+	/*
+	 * behaviour depends on if we just filled in previously zeroed options
+	 * or not.
+	 * XXX this does make the early page table marking read/write not work
+	 * so well.
+	 * if add
+	 *	if caching_mode -> flush 
+	 *	else flush write buffer.
+	 * else 
+	 *	flush_iotlb (we can defer in this case like linux does.
+	 * flushing context cache /pasid cache or iotlb is an *implicit* write
+	 * buffer flush.
+	 * it wouldb e better to use queued invalidation but for the first cut
+	 * just use the register based version.
+	 * it would also be good to know the region so we could do page
+	 * invalidated invalidates.
+	 */
+	val = DMAR_IOTLB_INVALIDATE;
+	if (ad != NULL) {
+		val |= (ad->ad_id & DMAR_IOTLB_DID_MASK) <<
+		    DMAR_IOTLB_DID_SHIFT;
+		val |= DMAR_IOTLB_INVAL_DOMAIN << DMAR_IOTLB_IIRG_SHIFT;
+	} else {
+		/* no domain, global inval. */
+		val |= DMAR_IOTLB_INVAL_GLOBAL << DMAR_IOTLB_IIRG_SHIFT;
+	}
+
+	if (ads->ads_cap & DMAR_CAP_DWD)
+		val |= DMAR_IOTLB_DW;
+	/* can't do any other invalidation etc while this is going on */
+	mtx_enter(&ad->ad_parent->ads_reg_lock);
+	bus_space_write_8(acpidmar_softc->as_memt, ad->ad_parent->ads_memh,
+	    iotlb_offset + 8, val);
+	while (bus_space_read_8(acpidmar_softc->as_memt,
+	    ad->ad_parent->ads_memh, iotlb_offset + 8) & DMAR_IOTLB_INVALIDATE)
+		SPINLOCK_SPIN_HOOK;
+	mtx_leave(&ad->ad_parent->ads_reg_lock);
+}
+
+void
+acpidmar_flush_ctx_register(struct acpidmar_drhd_softc *ads,
+    enum ctx_flush_type type, uint16_t domain_id, uint16_t  source,
+    uint8_t function_mask)
+{
+	uint64_t	val;
+
+	val = DMAR_CCMD_ICC;
+	switch (type) {
+	case CTX_FLUSH_GLOBAL:
+		val |= DMAR_CCMD_INVAL_GLOBAL << DMAR_CCMD_CIRG_SHIFT;
+		break;
+	case CTX_FLUSH_DOMAIN:
+		val |= DMAR_CCMD_INVAL_DOMAIN << DMAR_CCMD_CIRG_SHIFT;
+		break;
+	case CTX_FLUSH_DEVICE:
+		val |= DMAR_CCMD_INVAL_DEVICE << DMAR_CCMD_CIRG_SHIFT;
+		val |= (uint64_t)function_mask << DMAR_CCMD_FM_SHIFT;
+		val |= (uint64_t)domain_id << DMAR_CCMD_DID_SHIFT;
+		val |= (uint64_t)source << DMAR_CCMD_SID_SHIFT;
+		break;
+	}
+
+	mtx_enter(&ads->ads_reg_lock);
+	bus_space_write_8(acpidmar_softc->as_memt, ads->ads_memh,
+	     DMAR_CCMD_REG, val);
+
+	while (bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
+	    DMAR_CCMD_REG) & DMAR_CCMD_ICC)
+		SPINLOCK_SPIN_HOOK;
+	mtx_leave(&ads->ads_reg_lock);
 }
