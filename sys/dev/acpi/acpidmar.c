@@ -1240,23 +1240,37 @@ program_domain:
 	if (entry->pte_parent->pte_type == DMAR_PCI_BRIDGE) {
 		struct pci_tree_bridge	*bridge;
 		pcitag_t		 tag;
+		uint16_t		 source_id;
 
 		bridge = (struct pci_tree_bridge *)entry->pte_parent ;
 		if (bridge->ptb_is_pcie) {
+			int bus, dev, func;
 			tag = bridge->ptb_base.pte_tag;
+
+			pci_decompose_tag(pc, entry->pte_tag, &bus, &dev, &func);
+			source_id = bus << 16 | dev << 3 | func;
 		} else {
 			int			 bus;
 
 			pci_decompose_tag(pc, entry->pte_tag, &bus, NULL, NULL);
 			tag = pci_make_tag(pc, bus, 0, 0);
+			source_id = bus << 16 | 0 << 3 | 0;
 		}
 		/* We already confirmed that drhd matched. */
 		ctx_entry = context_for_pcitag(drhd, pc, tag);
 		*ctx_entry = make_context_entry(ad->ad_id,
 		    ad->ad_aspace->address_width,
 		    VM_PAGE_TO_PHYS(ad->ad_slptptr), CTX_TT_TRANSLATE);
+		/*
+		 * flush tlbs and context, same rules as above.
+		 * arguably we could track if this has already happeend for a
+		 * previous device attached to the same bridge. but since we
+		 * add contexts only at boot time i'm not sure if it is
+		 * worth the complexity.
+		 */
+		drhd->ads_flush_ctx(drhd, CTX_FLUSH_DEVICE, 0, source_id, 0);
+		drhd->ads_flush_tlb(drhd, NULL); /* XXX Global for now */
 	}
-	/* XXX flush writer buffers and tlbs */
 
 	/* note that device should not have translation switched on yet */
 	TAILQ_FOREACH(rmrr, &domain->apd_rmrrs, ars_entry) {
@@ -1317,7 +1331,7 @@ program_domain:
 				}
 			}
 		}
-		/* Flush tlbs */
+		drhd->ads_flush_tlb(drhd, ad); /* XXX device selective. */
 	}
 }
 
