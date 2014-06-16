@@ -465,58 +465,39 @@ struct acpidmar_domain;
 struct acpidmar_address_space {
 	uint64_t	address_size;
 	uint8_t		address_width; /* for hardware */
-	int		(*enter_page)(struct acpidmar_domain *, void *,
-			    bus_addr_t, paddr_t, int);
-	void		(*remove_page)(struct acpidmar_domain *, void *,
-			    bus_addr_t);
+	int		level;
 };
 
-int	acpidmar_enter_2level(struct acpidmar_domain *, void *, bus_addr_t,
-	    paddr_t, int);
-void	acpidmar_remove_2level(struct acpidmar_domain *, void *, bus_addr_t);
-int	acpidmar_enter_3level(struct acpidmar_domain *, void *, bus_addr_t,
-	    paddr_t, int);
-void	acpidmar_remove_3level(struct acpidmar_domain *, void *, bus_addr_t);
-int	acpidmar_enter_4level(struct acpidmar_domain *, void *, bus_addr_t,
-	    paddr_t, int);
-void	acpidmar_remove_4level(struct acpidmar_domain *, void *, bus_addr_t);
-int	acpidmar_enter_5level(struct acpidmar_domain *, void *, bus_addr_t,
-	    paddr_t, int);
-void	acpidmar_remove_5level(struct acpidmar_domain *, void *, bus_addr_t);
-int	acpidmar_enter_6level(struct acpidmar_domain *, void *, bus_addr_t,
-	    paddr_t, int);
-void	acpidmar_remove_6level(struct acpidmar_domain *, void *, bus_addr_t);
+int	acpidmar_enter_level(struct acpidmar_domain *ad, int level, void *ctx,
+	    bus_addr_t vaddr, paddr_t paddr, int flags);
+void	acpidmar_remove_level(struct acpidmar_domain *ad, int level, void *ctx,
+	    bus_addr_t vaddr);
 
 struct acpidmar_address_space acpidmar_address_spaces[] = {
 	{
 		.address_size = (1ULL<<30)-1,
 		.address_width = CTX_AW30BIT,
-		.enter_page = acpidmar_enter_2level,
-		.remove_page = acpidmar_remove_2level,
+		.level = 2,
 	},
 	{
 		.address_size = (1ULL<<39)-1,
 		.address_width = CTX_AW39BIT,
-		.enter_page = acpidmar_enter_3level,
-		.remove_page = acpidmar_remove_3level,
+		.level = 3,
 	},
 	{
 		.address_size = (1ULL<<48)-1,
 		.address_width = CTX_AW48BIT,
-		.enter_page = acpidmar_enter_4level,
-		.remove_page = acpidmar_remove_4level,
+		.level = 4,
 	},
 	{
 		.address_size = (1ULL<<57)-1,
 		.address_width = CTX_AW57BIT,
-		.enter_page = acpidmar_enter_5level,
-		.remove_page = acpidmar_remove_5level,
+		.level = 5,
 	},
 	{
 		.address_size = (~0ULL),
 		.address_width = CTX_AW64BIT,
-		.enter_page = acpidmar_enter_6level,
-		.remove_page = acpidmar_remove_6level,
+		.level = 6,
 	},
 };
 
@@ -1345,10 +1326,10 @@ program_domain:
 			    addr += PAGE_SIZE) {
 				int	ret;
 
-				if ((ret = ad->ad_aspace->enter_page(
-				    ad, ad->ad_root_entry, (bus_addr_t)addr,
-				    addr, BUS_DMA_WAITOK | BUS_DMA_READ |
-				    BUS_DMA_WRITE)) != 0) {
+				if ((ret = acpidmar_enter_level(
+				    ad, ad->ad_aspace->level, ad->ad_root_entry,
+				    (bus_addr_t)addr, addr, BUS_DMA_WAITOK |
+				    BUS_DMA_READ | BUS_DMA_WRITE)) != 0) {
 					panic("%s: can't enter rmrr %d",
 					    __func__, ret);
 				}
@@ -1379,7 +1360,9 @@ acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
 	    (ad->ad_parent->ads_cap & DMAR_CAP_ZLR) == 0)
 		flags |= BUS_DMA_READ;
 
-	ad->ad_aspace->enter_page(ad, ad->ad_root_entry, va, pa, flags);
+	/* XXX this must return... */
+	(acpidmar_enter_level(ad, ad->ad_aspace->level,
+	    ad->ad_root_entry, va, pa, flags));
 }
 
 void
@@ -1387,7 +1370,7 @@ acpidmar_domain_unbind_page(void *hdl, bus_addr_t va)
 {
 	struct acpidmar_domain	*ad = hdl;
 
-	ad->ad_aspace->remove_page(ad, ad->ad_root_entry, va);
+	acpidmar_remove_level(ad, ad->ad_aspace->level, ad->ad_root_entry, va);
 }
 
 /*
@@ -1527,75 +1510,6 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
   * through for now
   */
 
-
-#define PTE_READ	(1<<0)
-#define PTE_WRITE	(1<<1)
-#define PTE_EXECUTE	(1<<2)
-#ifdef notyet
-static inline uint64_t
-make_sl_pml4e(paddr_t slpdp)
-{
-	if (slpdp & 0xfff)
-		panic("%s: unaligned slppdp %llx", __func__, slpdp);
-	// for now just set write and read bits on all upper level page tables.
-	// we dont do virtualisation and thus the execute bit shouldn't matter.
-	return ((uint64_t)slpdp | PTE_READ | PTE_WRITE);
-}
-#endif
-
-#define SLPDPE_1GBPAGE	(1<<7)
-/*
- * Fill in a second-level pdp entry that references a secodn level page
- * directory. The format for 1GB pages is different and not currently handled.
- */
-#ifdef notyet
-static inline uint64_t
-make_sl_pdpe(paddr_t slpdp)
-{
-	if (slpdp & 0xfff)
-		panic("%s: unaligned slppdp %llx", __func__, slpdp);
-	return ((uint64_t)slpdp | PTE_READ | PTE_WRITE);
-}
-#endif
-
-#define SLPDE_2MBPAGE	(1<<7)
-/* 
- * returns the value of a filled in second-level page directory entry pointing
- * to the given second-level page table. The format for 2MB pages differs and
- * is not currently handled.
- */
-#ifdef notyet
-static inline uint64_t
-make_slpde(paddr_t slpt)
-{
-	if (slpt & 0xfff)
-		panic("%s: unaligned slpt %llx", __func__, slpt);
-	/*
-	 * XXX for now we just assume we'll need both read and write at lower
-	 * levels.
-	 */
-	return ((uint64_t)slpt | PTE_READ | PTE_WRITE);
-}
-#endif
-
-#define PTE_TRANSIENT	(1ULL<<62)
-#define PTE_SNOOP	(1ULL<<11)
-#define PTE_IPAT	(1ULL<<6)
-#define PTE_EMT_NC	0ULL
-#define PTE_EMT_WC	1ULL
-#define PTE_EMT_WT	4ULL
-#define PTE_EMT_WP	5ULL
-#define PTE_EMT_WB	6ULL
-#define PTE_EMT_MASK	0x7ULL
-#define PTE_EMT_SHIFT	3
-//static inline uint64_t
-//make_slpte(paddr_t page, uint64_t flags)
-//{
-//	if (page & 0xfff)
-//		panic("%s: unaligned page %llx", __func__, page);
-//}
-
-
 /* page table definitions */
 /* inlines to select the right root context for a tag */
 /* inlines to select the domain */
@@ -1628,374 +1542,155 @@ acpidmar_alloc_page(struct acpidmar_domain *ad, int flags)
 	return (pg);
 }
 
+#define PTE_MASK	(0x1ffULL)	/* bits per level. */
+#define PTE_TRANSIENT	(1ULL<<62)
+#define PTE_SNOOP	(1ULL<<11)
+#define PTE_LARGEPAGE	(1ULL<<7)
+#define PTE_IPAT	(1ULL<<6)
+#define PTE_EMT_NC	0ULL
+#define PTE_EMT_WC	1ULL
+#define PTE_EMT_WT	4ULL
+#define PTE_EMT_WP	5ULL
+#define PTE_EMT_WB	6ULL
+#define PTE_EMT_MASK	0x7ULL
+#define PTE_EMT_SHIFT	3
+#define PTE_EXECUTE	(1ULL<<2)
+#define PTE_WRITE	(1ULL<<1)
+#define PTE_READ	(1ULL<<0)
+
 /*
- * The following enter and remove fuctions work in a layered fashion.
- * for example enter_3level makes sure that the 2nd level is allocated, fills
- * in the entry in the third level then calls enter_2level.
+ * helper function working out the offset in the page (measured in int64_ts)
+ * for a given virtual address and current page table depth.
  */
-
-
-#define PDE_ADDR_SHIFT	(12+9)
-#define PDE_ADDR_MASK	(0x1ffULL<<PDE_ADDR_SHIFT)
-static inline uint64_t *
-acpidmar_2level_get_pt(struct acpidmar_domain *ad, uint64_t pd[512],
-   bus_addr_t vaddr, bool allocate, int flags)
+static inline int
+acpidmar_offset_for_level(int level, vaddr_t va)
 {
-	uint64_t	*pde;
-	paddr_t		 pt_phys;
-	struct vm_page	*pg;
+	int shift;
 
-	pde = &pd[(vaddr & PDE_ADDR_MASK) >> PDE_ADDR_SHIFT];
+	/* 9 bits for each level plus 12 bits for 4096 byte dma pages. */
+	shift =  12 + 9 * (level-1);
+	return ((va & (PTE_MASK<<shift)) >> shift);
+}
+
+#define PTE_MASK	(0x1ffULL)	/* bits per level. */
+#define PTE_LARGEPAGE	(1ULL<<7)
+/*
+ * acpidmar_enter_level enters a mapping into the page table for vaddr to paddr
+ * with the given (bus_dma) flags. We start at `level' using the page table page
+ * pointed to in `ctx' and recurively call down to the bottom level.
+ * For now, large pages are not handled.
+ */
+int
+acpidmar_enter_level(struct acpidmar_domain *ad, int level, void *ctx,
+    bus_addr_t vaddr, paddr_t paddr, int flags)
+{
+	uint64_t	*cur_entry, *current = ctx;
+	struct vm_page	*pg;
+	paddr_t		 next_phys;
+	int		 offset;
+
+	offset = acpidmar_offset_for_level(level, vaddr);
+	cur_entry = &current[offset];
 
 	/* we don't currently handle large pages. */
-	KASSERT((*pde & SLPDE_2MBPAGE) == 0);
+	KASSERT((*cur_entry & PTE_LARGEPAGE) == 0);
 
-	pt_phys = *pde & ~PAGE_MASK;
+	if (level == 1) {
+		uint64_t	 pteflags = 0;
 
-	if (pt_phys == 0) {
-		uint64_t	pde_val;
-
-		if (!allocate)
-			return (NULL);
-		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
-			return (NULL);
-
-		pt_phys = VM_PAGE_TO_PHYS(pg);
-		pde_val = pt_phys;
 		if (flags & BUS_DMA_READ)
-			pde_val |= PTE_READ;
+			pteflags |= PTE_READ;
 		if (flags & BUS_DMA_WRITE)
-			pde_val |= PTE_WRITE;
-		*pde = pde_val;
-		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pde, sizeof(*pde));
-	} else {
-		if ((*pde & PTE_READ) == 0 && flags & BUS_DMA_READ)
-			*pde |= PTE_READ;
-		if ((*pde & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
-			*pde |= PTE_WRITE;
-		pg = PHYS_TO_VM_PAGE(pt_phys);
-	}
-	return ((uint64_t *)pmap_map_direct(pg));
-}
+			pteflags |= PTE_WRITE;
 
-#define PTE_ADDR_SHIFT	(12)
-#define PTE_ADDR_MASK	(0x1ffULL<<PTE_ADDR_SHIFT)
-static inline uint64_t *
-acpidmar_2level_get_pte(uint64_t pt[512], bus_addr_t vaddr)
-{
-	return (&pt[(vaddr & PTE_ADDR_MASK) >> PTE_ADDR_SHIFT]);
-}
+		/* invalid to ask for nothing */
+		KASSERT(pteflags != 0);
 
-int
-acpidmar_enter_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
-    paddr_t paddr, int flags)
-{
-	uint64_t	*pt, *pte, *pd = ctx;
-	uint64_t	 pteflags = 0;
-
-	if (!(pt = acpidmar_2level_get_pt(ad, pd, vaddr, true, flags)))
-		return (ENOMEM);
-
-	pte = acpidmar_2level_get_pte(pt, vaddr);
-
-	if (flags & BUS_DMA_READ)
-		pteflags |= PTE_READ;
-	if (flags & BUS_DMA_WRITE)
-		pteflags |= PTE_WRITE;
-
-	/* invalid to ask for nothing */
-	KASSERT(pteflags != 0);
-
-	*pte = paddr | pteflags;
-	acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pte, sizeof(*pte));
+		*cur_entry = paddr | pteflags;
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)cur_entry,
+		    sizeof(*cur_entry));
 	
-	return (0);
+		return (0);
+	}
+
+	next_phys = *cur_entry & ~PAGE_MASK;
+
+	if (next_phys == 0) {
+		uint64_t	cur_entry_val;
+
+		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
+			return (ENOMEM);
+
+		next_phys = VM_PAGE_TO_PHYS(pg);
+		cur_entry_val = next_phys;
+		/*
+		 * See comment in the else below as to why we always do
+		 * read and write here.
+		 */
+#ifdef notyet
+		if (flags & BUS_DMA_READ)
+			cur_entry_val |= PTE_READ;
+		if (flags & BUS_DMA_WRITE)
+			cur_entry_val |= PTE_WRITE;
+#endif
+		cur_entry_val |= PTE_READ|PTE_WRITE;
+		*cur_entry = cur_entry_val;
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)cur_entry,
+		    sizeof(*cur_entry));
+	} else {
+		/*
+		 * We can't do this level stuff yet because we need to handle
+		 * the correct tlb flushing since this means an insert isn't
+		 * always just adding brand new entires, we need a backchannel
+		 * to pass this information.
+		 */
+#ifdef notyet 
+		if ((*cur_entry & PTE_READ) == 0 && flags & BUS_DMA_READ)
+			*cur_entry |= PTE_READ;
+		if ((*cur_entry & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
+			*cur_entry |= PTE_WRITE;
+#endif
+		pg = PHYS_TO_VM_PAGE(next_phys);
+	}
+	return (acpidmar_enter_level(ad, level - 1, (void *)pmap_map_direct(pg),
+	    vaddr, paddr, flags));
 }
 
+/*
+ * acpidmar_remove_level removes mappings for vaddr from the page table system
+ * starting at `level' with page table page `ctx'.
+ */
 void
-acpidmar_remove_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
+acpidmar_remove_level(struct acpidmar_domain *ad, int level, void *ctx,
+    bus_addr_t vaddr)
 {
-	uint64_t	*pt, *pte, *pd = ctx;
+	uint64_t	*next, *cur_entry, *current = ctx;
+	struct vm_page	*pg;
+	paddr_t		 next_phys;
+	int		 offset;
 
-	if (!(pt = acpidmar_2level_get_pt(ad, pd, vaddr, false, 0)))
-		return;
-	pte = acpidmar_2level_get_pte(pt, vaddr);
-	*pte = 0;
-
-	if (ctx == ad->ad_root_entry)
-		return;
-	/* check to see if pt is now empty, if so free page */
-}
-
-#define PDPE_ADDR_SHIFT	(12+9+9)
-#define PDPE_ADDR_MASK	(0x1ffULL<<PDPE_ADDR_SHIFT)
-static inline uint64_t *
-acpidmar_3level_get_pd(struct acpidmar_domain *ad, uint64_t pdp[512],
-    bus_addr_t vaddr, bool allocate, int flags)
-{
-	struct vm_page	 *pg;
-	uint64_t	 *pdpe;
-	paddr_t		  pd_phys;
-
-	pdpe = &pdp[(vaddr & PDPE_ADDR_MASK) >> PDPE_ADDR_SHIFT];
+	offset = acpidmar_offset_for_level(level, vaddr);
+	cur_entry = &current[offset];
 
 	/* we don't currently handle large pages. */
-	KASSERT((*pdpe & SLPDPE_1GBPAGE) == 0);
+	KASSERT((*cur_entry & PTE_LARGEPAGE) == 0);
 
-	pd_phys = *pdpe & ~PAGE_MASK;
-
-	if (pd_phys == 0) {
-		uint64_t    pdpe_val;
-		if (!allocate)
-			return (NULL);
-		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
-			return (NULL);
-
-		pd_phys = VM_PAGE_TO_PHYS(pg);
-		pdpe_val = pd_phys;
-		if (flags & BUS_DMA_READ)
-			pdpe_val |= PTE_READ;
-		if (flags & BUS_DMA_WRITE)
-			pdpe_val |= PTE_WRITE;
-		*pdpe = pdpe_val;
-		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pdpe, sizeof(*pdpe));
-	} else {
-		if ((*pdpe & PTE_READ) == 0 && flags & BUS_DMA_READ)
-			*pdpe |= PTE_READ;
-		if ((*pdpe & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
-			*pdpe |= PTE_WRITE;
-		pg = PHYS_TO_VM_PAGE(pd_phys);
-		/* cache flushing? */
+	if (level == 1) {
+		*cur_entry = 0;
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)cur_entry,
+		    sizeof(*cur_entry));
+		return;
 	}
 
-	return ((uint64_t *)pmap_map_direct(pg));
-}
+	next_phys = *cur_entry & ~PAGE_MASK;
 
-int
-acpidmar_enter_3level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
-    paddr_t paddr, int flags)
-{
-	uint64_t	 *pd, *pdp = ctx;
-
-	if (!(pd = acpidmar_3level_get_pd(ad, pdp, vaddr, true, flags)))
-		return (ENOMEM);
-
-	return (acpidmar_enter_3level(ad, pd, vaddr, paddr, flags));
-}
-
-void
-acpidmar_remove_3level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
-{
-	uint64_t	 *pd, *pdp = ctx;
-
-	if (!(pd = acpidmar_3level_get_pd(ad, pdp, vaddr, false, 0)))
+	if (next_phys == 0)
 		return;
+	pg = PHYS_TO_VM_PAGE(next_phys);
+	next = (uint64_t *)pmap_map_direct(pg);
+	acpidmar_remove_level(ad, level -1, next, vaddr);
 
-	acpidmar_remove_3level(ad, pd, vaddr);
-	if (ctx == ad->ad_root_entry)
-		return;
-	/* check if pd is unused and if so nuke it */
-}
-
-#define PML4E_ADDR_SHIFT	(12+9+9+9)
-#define PML4E_ADDR_MASK		(0x1ffULL<<PML4E_ADDR_SHIFT)
-
-static inline uint64_t *
-acpidmar_4level_get_pdp(struct acpidmar_domain *ad, uint64_t pm4l[512],
-    bus_addr_t vaddr, bool allocate, int flags)
-{
-	uint64_t 	*pm4le;
-	paddr_t		 pdp_phys;
-	struct vm_page	*pg;
-
-	pm4le = &pm4l[(vaddr & PML4E_ADDR_MASK) >> PML4E_ADDR_SHIFT];
-
-	pdp_phys = *pm4le & ~PAGE_MASK;
-
-	if (pdp_phys == 0) {
-		uint64_t    pm4le_val;
-
-		if (!allocate)
-			return (NULL);
-		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
-			return (NULL);
-
-		pdp_phys = VM_PAGE_TO_PHYS(pg);
-		pm4le_val = pdp_phys;
-		if (flags & BUS_DMA_READ)
-			pm4le_val |= PTE_READ;
-		if (flags & BUS_DMA_WRITE)
-			pm4le_val |= PTE_WRITE;
-		*pm4le = pm4le_val;
-		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pm4le,
-		    sizeof(*pm4le));
-	} else {
-		if ((*pm4le & PTE_READ) == 0 && flags & BUS_DMA_READ)
-			*pm4le |= PTE_READ;
-		if ((*pm4le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
-			*pm4le |= PTE_WRITE;
-		pg = PHYS_TO_VM_PAGE(pdp_phys);
-	}
-	return ((uint64_t *)pmap_map_direct(pg));
-}
-
-int
-acpidmar_enter_4level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
-    paddr_t paddr, int flags)
-{
-	uint64_t	*pdp, *pm4l = ctx;
-
-	if (!(pdp = acpidmar_4level_get_pdp(ad, pm4l, vaddr, true, flags)))
-		return (ENOMEM);
-
-	return (acpidmar_enter_3level(ad, pdp, vaddr, paddr, flags));
-}
-
-void
-acpidmar_remove_4level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
-{
-	uint64_t	*pdp, *pm4l = ctx;
-
-	if (!(pdp = acpidmar_4level_get_pdp(ad, pm4l, vaddr, false, 0)))
-		return;
-
-	acpidmar_remove_3level(ad, pdp, vaddr);
-	if (ctx == ad->ad_root_entry)
-		return;
-	/* check if pdp is unused and if so nuke it */
-}
-
-#define PML5E_ADDR_SHIFT	(12+9+9+9+9)
-#define PML5E_ADDR_MASK		(0x1ffULL<<PML5E_ADDR_SHIFT)
-static inline uint64_t *
-acpidmar_5level_get_pm4l(struct acpidmar_domain *ad, uint64_t pm5l[512],
-    bus_addr_t vaddr, bool allocate, int flags)
-{
-	struct vm_page	*pg;
-	uint64_t	*pm5le;
-	paddr_t		 pm4l_phys;
-
-	pm5le = &pm5l[(vaddr & PML5E_ADDR_MASK) >> PML5E_ADDR_SHIFT];
-
-	pm4l_phys = *pm5le & ~PAGE_MASK;
-
-	if (pm4l_phys == 0) {
-		uint64_t	pm5le_val;
-
-		if (!allocate)
-			return (NULL);
-		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
-			return (NULL);
-
-		pm4l_phys = VM_PAGE_TO_PHYS(pg);
-		pm5le_val = pm4l_phys;
-		if (flags & BUS_DMA_READ)
-			pm5le_val |= PTE_READ;
-		if (flags & BUS_DMA_WRITE)
-			pm5le_val |= PTE_WRITE;
-		*pm5le = pm5le_val;
-		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pm5le,
-		    sizeof(*pm5le));
-	} else {
-		if ((*pm5le & PTE_READ) == 0 && flags & BUS_DMA_READ)
-			*pm5le |= PTE_READ;
-		if ((*pm5le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
-			*pm5le |= PTE_WRITE;
-		pg = PHYS_TO_VM_PAGE(pm4l_phys);
-	}
-	return ((uint64_t *)pmap_map_direct(pg));
-}
-
-int
-acpidmar_enter_5level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
-    paddr_t paddr, int flags)
-{
-	uint64_t	*pm4l, *pm5l = ctx;
-
-	if (!(pm4l = acpidmar_5level_get_pm4l(ad, pm5l, vaddr, true, flags)))
-		return (ENOMEM);
-
-	return (acpidmar_enter_4level(ad, pm4l, vaddr, paddr, flags));
-}
-
-void
-acpidmar_remove_5level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
-{
-	uint64_t	*pm5le, *pm5l = ctx;
-
-	if (!(pm5le = acpidmar_5level_get_pm4l(ad, pm5l, vaddr, false, 0)))
-		return;
-
-	acpidmar_remove_4level(ad, pm5l, vaddr);
-	if (ctx == ad->ad_root_entry)
-		return;
-	/* check if pm4l is unused and if so nuke it */
-}
-
-#define PML6E_ADDR_SHIFT	(12+9+9+9+9+9)
-#define PML6E_ADDR_MASK		(0x1ffULL<<PML6E_ADDR_SHIFT)
-static inline uint64_t *
-acpidmar_6level_get_pm5l(struct acpidmar_domain *ad, uint64_t pm6l[512],
-    bus_addr_t vaddr, bool allocate, int flags)
-{
-	struct vm_page	*pg;
-	uint64_t	*pm6le;
-	paddr_t		 pm5l_phys;
-
-	pm6le = &pm6l[(vaddr & PML6E_ADDR_MASK) >> PML6E_ADDR_SHIFT];
-
-	pm5l_phys = *pm6le & ~PAGE_MASK;
-
-	if (pm5l_phys == 0) {
-		uint64_t	pm6le_val;
-		if (!allocate)
-			return (NULL);
-		if ((pg = acpidmar_alloc_page(ad, flags)) == NULL)
-			return (NULL);
-
-		pm5l_phys = VM_PAGE_TO_PHYS(pg);
-		pm6le_val = pm5l_phys;
-		if (flags & BUS_DMA_READ)
-			pm6le_val |= PTE_READ;
-		if (flags & BUS_DMA_WRITE)
-			pm6le_val |= PTE_WRITE;
-		*pm6le = pm6le_val;
-		/* cache flushing? */
-	} else {
-		if ((*pm6le & PTE_READ) == 0 && flags & BUS_DMA_READ)
-			*pm6le |= PTE_READ;
-		if ((*pm6le & PTE_WRITE) == 0 && flags & BUS_DMA_WRITE)
-			*pm6le |= PTE_WRITE;
-		pg = PHYS_TO_VM_PAGE(pm5l_phys);
-	}
-
-	return ((uint64_t *)pmap_map_direct(pg));
-}
-
-int
-acpidmar_enter_6level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
-    paddr_t paddr, int flags)
-{
-	uint64_t	*pm5l, *pm6l = ctx;
-
-	if (!(pm5l = acpidmar_6level_get_pm5l(ad, pm6l, vaddr, true, flags)))
-		return (ENOMEM);
-
-	return (acpidmar_enter_5level(ad, pm5l, vaddr, paddr, flags));
-}
-
-void
-acpidmar_remove_6level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr)
-{
-	uint64_t	*pm5l, *pm6l = ctx;
-
-	if (!(pm5l = acpidmar_6level_get_pm5l(ad, pm6l, vaddr, false, 0)))
-		return;
-
-	acpidmar_remove_5level(ad, pm5l, vaddr);
-	if (ctx == ad->ad_root_entry)
-		return;
-	/* check if entry is unused and if so nuke it */
+	/* XXX check if next next level is now empty, and free it if so.*/
 }
 
 #define DMAR_IOTLB_INVALIDATE	(1ULL<<63)
