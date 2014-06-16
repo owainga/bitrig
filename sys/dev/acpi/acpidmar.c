@@ -809,6 +809,16 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	    DMAR_CAP_REG);
 	ads->ads_ecap = bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
 	    DMAR_ECAP_REG);
+	printf("rd: %s, wd: %s, zlr: %s, cm: %s, rwbf: %s, dis %s, pt %s, qi: %s, C: %s",
+		ads->ads_cap & DMAR_CAP_DRD ? "true": "false",
+		ads->ads_cap & DMAR_CAP_DWD ? "true": "false",
+		ads->ads_cap & DMAR_CAP_ZLR ? "true": "false",
+		ads->ads_cap & DMAR_CAP_CM ? "true": "false",
+		ads->ads_cap & DMAR_CAP_RWBF ? "true": "false",
+		ads->ads_ecap & DMAR_ECAP_DIS ? "true": "false",
+		ads->ads_ecap & DMAR_ECAP_PT ? "true": "false",
+		ads->ads_ecap & DMAR_ECAP_QI ? "true": "false",
+		ads->ads_ecap & DMAR_ECAP_C ? "true": "false");
 	/*
 	 * This will truncate to 16 bits, so a 16 bit id will be 0.
 	 * note that we always preallocate the 0th domain for simplicity.
