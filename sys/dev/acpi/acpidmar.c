@@ -1,7 +1,5 @@
-/* $OpenBSD: acpimadt.c,v 1.26 2012/01/07 20:13:16 kettenis Exp $ */
 /*
  * Copyright (c) 2013 Owain G. Ainsworth <oga@nicotinebsd.org>
- * Copyright (c) 2006 Mark Kettenis <kettenis@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
