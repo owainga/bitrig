@@ -1144,6 +1144,7 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 
 	/* make new domain struct. */
 	ad = malloc(sizeof(*domain), M_DEVBUF, M_WAITOK | M_ZERO);
+	ad->ad_parent = drhd;
 	ad->ad_id = domain_id;
 	ad->ad_refs = 1;
 
@@ -1318,10 +1319,11 @@ program_domain:
 		    rmrr->ars_limaddr - rmrr->ars_addr + 1,
 		    4096, 0, 0, EX_WAITOK, &result) == 0) {
 			paddr_t addr;
-			int	ret;
 
 			for (addr = rmrr->ars_addr; addr <= rmrr->ars_limaddr;
 			    addr += PAGE_SIZE) {
+				int	ret;
+
 				if ((ret = ad->ad_aspace->enter_page(
 				    ad, ad->ad_root_entry, (bus_addr_t)addr,
 				    addr, BUS_DMA_WAITOK | BUS_DMA_READ |
@@ -1988,7 +1990,7 @@ acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
 	bus_size_t		 iotlb_offset;
 	uint64_t		 val;
 
-	iotlb_offset = ((ad->ad_parent->ads_ecap & DMAR_ECAP_IRO_MASK) >>
+	iotlb_offset = ((ads->ads_ecap & DMAR_ECAP_IRO_MASK) >>
 		DMAR_ECAP_IRO_SHIFT) * 16;
 	/*
 	 * behaviour depends on if we just filled in previously zeroed options
@@ -2020,13 +2022,13 @@ acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
 	if (ads->ads_cap & DMAR_CAP_DWD)
 		val |= DMAR_IOTLB_DW;
 	/* can't do any other invalidation etc while this is going on */
-	mtx_enter(&ad->ad_parent->ads_reg_lock);
-	bus_space_write_8(acpidmar_softc->as_memt, ad->ad_parent->ads_memh,
+	mtx_enter(&ads->ads_reg_lock);
+	bus_space_write_8(acpidmar_softc->as_memt, ads->ads_memh,
 	    iotlb_offset + 8, val);
-	while (bus_space_read_8(acpidmar_softc->as_memt,
-	    ad->ad_parent->ads_memh, iotlb_offset + 8) & DMAR_IOTLB_INVALIDATE)
+	while (bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
+	    iotlb_offset + 8) & DMAR_IOTLB_INVALIDATE)
 		SPINLOCK_SPIN_HOOK;
-	mtx_leave(&ad->ad_parent->ads_reg_lock);
+	mtx_leave(&ads->ads_reg_lock);
 }
 
 void
