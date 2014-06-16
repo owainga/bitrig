@@ -1667,7 +1667,7 @@ acpidmar_2level_get_pt(struct acpidmar_domain *ad, uint64_t pd[512],
 		if (flags & BUS_DMA_WRITE)
 			pde_val |= PTE_WRITE;
 		*pde = pde_val;
-		/* cache flushing? */
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pde, sizeof(*pde));
 	} else {
 		if ((*pde & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pde |= PTE_READ;
@@ -1707,6 +1707,7 @@ acpidmar_enter_2level(struct acpidmar_domain *ad, void *ctx, bus_addr_t vaddr,
 	KASSERT(pteflags != 0);
 
 	*pte = paddr | pteflags;
+	acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pte, sizeof(*pte));
 	
 	return (0);
 }
@@ -1757,7 +1758,7 @@ acpidmar_3level_get_pd(struct acpidmar_domain *ad, uint64_t pdp[512],
 		if (flags & BUS_DMA_WRITE)
 			pdpe_val |= PTE_WRITE;
 		*pdpe = pdpe_val;
-		/* cache flushing? */
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pdpe, sizeof(*pdpe));
 	} else {
 		if ((*pdpe & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pdpe |= PTE_READ;
@@ -1826,7 +1827,8 @@ acpidmar_4level_get_pdp(struct acpidmar_domain *ad, uint64_t pm4l[512],
 		if (flags & BUS_DMA_WRITE)
 			pm4le_val |= PTE_WRITE;
 		*pm4le = pm4le_val;
-		/* cache flushing? */
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pm4le,
+		    sizeof(*pm4le));
 	} else {
 		if ((*pm4le & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pm4le |= PTE_READ;
@@ -1892,7 +1894,8 @@ acpidmar_5level_get_pm4l(struct acpidmar_domain *ad, uint64_t pm5l[512],
 		if (flags & BUS_DMA_WRITE)
 			pm5le_val |= PTE_WRITE;
 		*pm5le = pm5le_val;
-		/* cache flushing? */
+		acpidmar_flush_cache(ad->ad_parent, (vaddr_t)pm5le,
+		    sizeof(*pm5le));
 	} else {
 		if ((*pm5le & PTE_READ) == 0 && flags & BUS_DMA_READ)
 			*pm5le |= PTE_READ;
