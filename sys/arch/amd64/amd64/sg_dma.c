@@ -73,7 +73,7 @@ int		sg_dmamap_append_range(bus_dma_tag_t, bus_dmamap_t, paddr_t,
 		    bus_size_t, int, bus_size_t);
 int		sg_iomap_insert_page(struct sg_page_map *, paddr_t);
 bus_addr_t	sg_iomap_translate(struct sg_page_map *, paddr_t);
-void		sg_iomap_load_map(struct sg_cookie *, struct sg_page_map *,
+int		sg_iomap_load_map(struct sg_cookie *, struct sg_page_map *,
 		    bus_addr_t, int);
 void		sg_iomap_unload_map(struct sg_cookie *, struct sg_page_map *);
 void		sg_iomap_destroy(struct sg_page_map *);
@@ -81,7 +81,7 @@ void		sg_iomap_clear_pages(struct sg_page_map *);
 
 int
 sg_dmatag_alloc(char *name, void *hdl, bus_addr_t start, bus_size_t size,
-    void bind_page(void *, bus_addr_t, paddr_t, int),
+    int bind_page(void *, bus_addr_t, paddr_t, int),
     void unbind_page(void *, bus_addr_t), void flush_tlb(void *),
     bus_dma_tag_t *dmat)
 {
@@ -120,7 +120,7 @@ sg_dmatag_alloc(char *name, void *hdl, bus_addr_t start, bus_size_t size,
 
 struct sg_cookie *
 sg_dmatag_init(char *name, void *hdl, bus_addr_t start, bus_size_t size,
-    void bind(void *, bus_addr_t, paddr_t, int),
+    int bind(void *, bus_addr_t, paddr_t, int),
     void unbind(void *, bus_addr_t), void flush_tlb(void *))
 {
 	struct sg_cookie	*cookie;
@@ -309,7 +309,10 @@ sg_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 
 	map->dm_mapsize = buflen;
 
-	sg_iomap_load_map(is, spm, dvmaddr, flags);
+	err = sg_iomap_load_map(is, spm, dvmaddr, flags);
+	if (err != 0) {
+		goto out;
+	}
 
 	{ /* Scope */
 		bus_addr_t a, aend;
@@ -351,6 +354,8 @@ sg_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 			}
 		}
 	}
+
+out:
 	if (err) {
 		sg_dmamap_unload(t, map);
 	} else {
@@ -607,10 +612,11 @@ sg_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
 
 	map->dm_mapsize = size;
 
-	sg_iomap_load_map(is, spm, dvmaddr, flags);
-
-	err = sg_dmamap_load_seg(t, is, map, segs, nsegs, flags,
-	    size, boundary);
+	err = sg_iomap_load_map(is, spm, dvmaddr, flags);
+	if (err == 0) {
+		err = sg_dmamap_load_seg(t, is, map, segs, nsegs, flags,
+		    size, boundary);
+	}
 
 	if (err) {
 		sg_dmamap_unload(t, map);
@@ -944,19 +950,24 @@ sg_iomap_insert_page(struct sg_page_map *spm, paddr_t pa)
  * Locate the iomap by filling in the pa->va mapping and inserting it
  * into the IOMMU tables.
  */
-void
+int
 sg_iomap_load_map(struct sg_cookie *sc, struct sg_page_map *spm,
     bus_addr_t vmaddr, int flags)
 {
 	struct sg_page_entry	*e;
-	int			 i;
+	int			 i, err;
 
 	for (i = 0, e = spm->spm_map; i < spm->spm_pagecnt; ++i, ++e) {
 		e->spe_va = vmaddr;
-		sc->bind_page(sc->sg_hdl, e->spe_va, e->spe_pa, flags);
+		err = sc->bind_page(sc->sg_hdl, e->spe_va, e->spe_pa, flags);
+		if (err != 0)
+			break;
+
 		vmaddr += PAGE_SIZE;
 	}
 	sc->flush_tlb(sc->sg_hdl);
+
+	return (err);
 }
 
 /*

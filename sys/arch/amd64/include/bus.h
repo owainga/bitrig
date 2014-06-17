@@ -705,7 +705,7 @@ struct sg_cookie {
 	struct extent	*sg_ex;
 	void		*sg_hdl;
 
-	void		(*bind_page)(void *, bus_addr_t, paddr_t, int);
+	int		(*bind_page)(void *, bus_addr_t, paddr_t, int);
 	void		(*unbind_page)(void *, bus_addr_t);
 	void		(*flush_tlb)(void *);
 };
@@ -736,11 +736,11 @@ struct sg_page_map {
 };
 
 int			sg_dmatag_alloc(char *, void *, bus_addr_t, bus_size_t,
-			    void (*)(void *, vaddr_t, paddr_t, int),
+			    int (*)(void *, vaddr_t, paddr_t, int),
 			    void (*)(void *, vaddr_t), void (*)(void *),
 			    bus_dma_tag_t *);
 struct sg_cookie	*sg_dmatag_init(char *, void *, bus_addr_t, bus_size_t,
-			    void (*)(void *, vaddr_t, paddr_t, int),
+			    int (*)(void *, vaddr_t, paddr_t, int),
 			    void (*)(void *, vaddr_t), void (*)(void *));
 void	sg_dmatag_destroy(struct sg_cookie *);
 int	sg_dmamap_create(bus_dma_tag_t, bus_size_t, int, bus_size_t,

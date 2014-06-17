@@ -515,9 +515,9 @@ struct acpidmar_domain {
 	/* dma tag */
 };
 
-void acpidmar_domain_bind_page(void *, bus_addr_t, paddr_t, int);
-void acpidmar_domain_unbind_page(void *, bus_addr_t);
-void acpidmar_domain_flush_tlb(void *);
+int	acpidmar_domain_bind_page(void *, bus_addr_t, paddr_t, int);
+void	acpidmar_domain_unbind_page(void *, bus_addr_t);
+void	acpidmar_domain_flush_tlb(void *);
 
 enum ctx_flush_type {
 	CTX_FLUSH_GLOBAL,
@@ -1339,7 +1339,7 @@ program_domain:
 	}
 }
 
-void
+int
 acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
 {
 	struct acpidmar_domain	*ad = hdl;
@@ -1361,7 +1361,7 @@ acpidmar_domain_bind_page(void *hdl, bus_addr_t va, paddr_t pa, int flags)
 		flags |= BUS_DMA_READ;
 
 	/* XXX this must return... */
-	(acpidmar_enter_level(ad, ad->ad_aspace->level,
+	return (acpidmar_enter_level(ad, ad->ad_aspace->level,
 	    ad->ad_root_entry, va, pa, flags));
 }
 
