@@ -1506,14 +1506,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 }
 
 /* bootstrapping - how to handle gpu enablement. */
- /* check extended capability register for passthrough -> can put gpu as pass
-  * through for now
-  */
 
-/* page table definitions */
-/* inlines to select the right root context for a tag */
-/* inlines to select the domain */
-/* inlines to select the right pte */
 /*
  * Allocate a page for a levelled page table entry. Eventually this will do
  * caching for BUS_DMA_ALLOCNOW allocations.
