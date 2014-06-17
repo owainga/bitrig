@@ -115,7 +115,7 @@
 #define DMAR_GCMD_CFI		(1ULL<<23)
 
 /* 10.4.5 Global Status Register. */
-#define DMAR_GSTS_REG	0x18
+#define DMAR_GSTS_REG	0x1C
 #define DMAR_GSTS_TES		(1ULL<<31)
 #define DMAR_GSTS_RTPS		(1ULL<<30)
 #define DMAR_GSTS_FLS		(1ULL<<29)
@@ -872,9 +872,28 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	/* Purge allocation zeroing from cache before the hardware sees it. */
 	acpidmar_flush_cache(ads, (vaddr_t)ads->ads_rtable, PAGE_SIZE);
 
+	/*
+	 * Set root address. root address has no flags since we don't
+	 * want extended root entries so value is just the physical address
+	 * of the root table page.
+	 */
+	bus_space_write_8(sc->as_memt, ads->ads_memh, DMAR_RTADDR_REG,
+	    VM_PAGE_TO_PHYS(pg));
+	/*
+	 * XXX TE, EAFL, QIE, IRE and CFI  must be written to this field once
+	 * enabled (since a 0 write is the same as disabling it).
+	 * we assume here that we haven't yet enabled them.
+	 */
 	/* program root context */
-	/* ordered global invalidate of context cache, pasid cache (not yet),
-	 * and IOTLB */
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_GCMD_REG,
+	    DMAR_GCMD_SRTP);
+	while ((bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_GSTS_REG) &
+	    DMAR_GSTS_RTPS) == 0)
+		SPINLOCK_SPIN_HOOK;
+	    
+	/* invalidate ctx, pasid (later) and tlb caches. */
+	ads->ads_flush_ctx(ads, CTX_FLUSH_GLOBAL, 0, 0, 0);
+	ads->ads_flush_tlb(ads, NULL);
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
