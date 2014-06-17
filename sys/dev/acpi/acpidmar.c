@@ -798,16 +798,6 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	    DMAR_CAP_REG);
 	ads->ads_ecap = bus_space_read_8(acpidmar_softc->as_memt, ads->ads_memh,
 	    DMAR_ECAP_REG);
-	printf("rd: %s, wd: %s, zlr: %s, cm: %s, rwbf: %s, dis %s, pt %s, qi: %s, C: %s",
-		ads->ads_cap & DMAR_CAP_DRD ? "true": "false",
-		ads->ads_cap & DMAR_CAP_DWD ? "true": "false",
-		ads->ads_cap & DMAR_CAP_ZLR ? "true": "false",
-		ads->ads_cap & DMAR_CAP_CM ? "true": "false",
-		ads->ads_cap & DMAR_CAP_RWBF ? "true": "false",
-		ads->ads_ecap & DMAR_ECAP_DIS ? "true": "false",
-		ads->ads_ecap & DMAR_ECAP_PT ? "true": "false",
-		ads->ads_ecap & DMAR_ECAP_QI ? "true": "false",
-		ads->ads_ecap & DMAR_ECAP_C ? "true": "false");
 	/*
 	 * This will truncate to 16 bits, so a 16 bit id will be 0.
 	 * note that we always preallocate the 0th domain for simplicity.
@@ -842,6 +832,18 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 			    drhd->address);
 	}
 
+	/* print some basic stuff for now for debugging. */
+	printf("rd: %s, wd: %s, zlr: %s, cm: %s, rwbf: %s, dis %s, pt %s, "
+	    "qi: %s, C: %s\n", ads->ads_cap & DMAR_CAP_DRD ? "true": "false",
+	    ads->ads_cap & DMAR_CAP_DWD ? "true": "false",
+	    ads->ads_cap & DMAR_CAP_ZLR ? "true": "false",
+	    ads->ads_cap & DMAR_CAP_CM ? "true": "false",
+	    ads->ads_cap & DMAR_CAP_RWBF ? "true": "false",
+	    ads->ads_ecap & DMAR_ECAP_DIS ? "true": "false",
+	    ads->ads_ecap & DMAR_ECAP_PT ? "true": "false",
+	    ads->ads_ecap & DMAR_ECAP_QI ? "true": "false",
+	    ads->ads_ecap & DMAR_ECAP_C ? "true": "false");
+
 
 	ads->ads_flags = drhd->flags;
 	ads->ads_addr = drhd->address;
@@ -857,7 +859,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	 * Allocate memory for the root context table.
 	 * XXX km_alloc(, &kv_singlepage) would also work here but we would have
 	 * to have a structure to keep track of the virtual address mappings.
-	 * for simplicity we make useo f the fact this code as written will only
+	 * for simplicity we make use of the fact this code as written will only
 	 * work on PMAP_DIRECT architectures and we allocate pages directly 
 	 * then we can find their virtual address implicitly.
 	 */
