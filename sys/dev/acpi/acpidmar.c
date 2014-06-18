@@ -536,6 +536,8 @@ struct acpidmar_drhd_softc {
 	uint64_t				 ads_addr;
 	uint64_t				 ads_cap;
 	uint64_t				 ads_ecap;
+	/* flags that must be set in gcmd to prevent disabling things we want */
+	uint32_t				 ads_gcmd_persist;
 	uint16_t				 ads_scopelen;
 	uint16_t				 ads_max_domains;
 	uint16_t				 ads_next_domain;
@@ -559,6 +561,7 @@ void	acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
 void	acpidmar_flush_ctx_register(struct acpidmar_drhd_softc *,
 	    enum ctx_flush_type type, uint16_t domain_id, uint16_t  source,
 	    uint8_t function_mask);
+void	acpidmar_flush_write_buffer(struct acpidmar_drhd_softc *ads);
 static inline void
 acpidmar_flush_cache(struct acpidmar_drhd_softc *ads, vaddr_t addr, vsize_t sz)
 {
@@ -886,7 +889,7 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	 */
 	/* program root context */
 	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_GCMD_REG,
-	    DMAR_GCMD_SRTP);
+	    DMAR_GCMD_SRTP | ads->ads_gcmd_persist);
 	while ((bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_GSTS_REG) &
 	    DMAR_GSTS_RTPS) == 0)
 		SPINLOCK_SPIN_HOOK;
@@ -1251,7 +1254,7 @@ program_domain:
 		drhd->ads_flush_ctx(drhd, CTX_FLUSH_DEVICE, 0, source_id, 0);
 		drhd->ads_flush_tlb(drhd, NULL); /* XXX Global for now */
 	} else {
-		/* flush write buffer */
+		acpidmar_flush_write_buffer(ad->ad_parent);
 	}
 
 	/*
@@ -1403,7 +1406,32 @@ acpidmar_domain_flush_tlb(void *hdl)
 {
 	struct acpidmar_domain	*ad = hdl;
 
+	/*
+	 * behaviour depends on if we just filled in previously zeroed options
+	 * or not.
+	 * XXX this does make the early page table marking read/write not work
+	 * XXX so well we need a flag before we can turn that back on..
+	 * flushing context cache /pasid cache or iotlb is an *implicit* write
+	 * buffer flush.
+	 * it would be better to use queued invalidation but for the first cut
+	 * just use the register based version.
+	 * it would also be good to know the region so we could do page
+	 * invalidated invalidates.
+	 */
+
+#ifdef notyet
+	if added && !modified && (ad->ad_parent->ads_cap & DMAR_CAP_CM) == 0 {
+		acpidmar_flush_write_buffer(ad->ad_parent);
+	} else {
+		/*
+		 * XXX we can defer this in the unmap case to a timeout to
+		 * allow us to batch these.
+		 */
+		ad->ad_parent->ads_flush_tlb(ad->ad_parent, ad);
+	}
+#else /* notyet */
 	ad->ad_parent->ads_flush_tlb(ad->ad_parent, ad);
+#endif
 }
 
 
@@ -1728,23 +1756,6 @@ acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
 
 	iotlb_offset = ((ads->ads_ecap & DMAR_ECAP_IRO_MASK) >>
 		DMAR_ECAP_IRO_SHIFT) * 16;
-	/*
-	 * behaviour depends on if we just filled in previously zeroed options
-	 * or not.
-	 * XXX this does make the early page table marking read/write not work
-	 * so well.
-	 * if add
-	 *	if caching_mode -> flush 
-	 *	else flush write buffer.
-	 * else 
-	 *	flush_iotlb (we can defer in this case like linux does.
-	 * flushing context cache /pasid cache or iotlb is an *implicit* write
-	 * buffer flush.
-	 * it wouldb e better to use queued invalidation but for the first cut
-	 * just use the register based version.
-	 * it would also be good to know the region so we could do page
-	 * invalidated invalidates.
-	 */
 	val = DMAR_IOTLB_INVALIDATE;
 	if (ad != NULL) {
 		val |= (ad->ad_id & DMAR_IOTLB_DID_MASK) <<
@@ -1798,4 +1809,18 @@ acpidmar_flush_ctx_register(struct acpidmar_drhd_softc *ads,
 	    DMAR_CCMD_REG) & DMAR_CCMD_ICC)
 		SPINLOCK_SPIN_HOOK;
 	mtx_leave(&ads->ads_reg_lock);
+}
+
+void
+acpidmar_flush_write_buffer(struct acpidmar_drhd_softc *ads)
+{
+	/* only if the hardware requires it. */
+	if ((ads->ads_cap & DMAR_CAP_RWBF) == 0)
+		return
+
+	bus_space_write_4(acpidmar_softc->as_memt, ads->ads_memh,
+	    DMAR_GCMD_REG, DMAR_GCMD_WBF | ads->ads_gcmd_persist);
+	while ((bus_space_read_4(acpidmar_softc->as_memt, ads->ads_memh,
+	    DMAR_GSTS_REG) & DMAR_GSTS_WBFS) != 0)
+		SPINLOCK_SPIN_HOOK;
 }
