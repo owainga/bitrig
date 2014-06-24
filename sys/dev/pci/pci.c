@@ -105,6 +105,8 @@ int pci_enumerate_bus(struct pci_softc *,
 int	pci_reserve_resources(struct pci_attach_args *);
 int	pci_primary_vga(struct pci_attach_args *);
 
+void	(*pci_enable_iommu)(int domain);
+
 /*
  * Important note about PCI-ISA bridges:
  *
@@ -190,6 +192,16 @@ pciattach(struct device *parent, struct device *self, void *aux)
 		extent_alloc_region(sc->sc_busex, sc->sc_bus, 1, EX_NOWAIT);
 
 	pci_enumerate_bus(sc, pci_reserve_resources, NULL);
+
+	/*
+	 * This is a little bit of a hack, any stuff that needs special
+	 * treatment by iommus (initial setup, etc) tends to be in the
+	 * first bus, so after the first enumeration of the first bus we
+	 * enable the iommu if necessary.
+	 */
+	if (sc->sc_bus == 0 && pci_enable_iommu != NULL) {
+		pci_enable_iommu(sc->sc_domain);
+	}
 
 	/* Find the VGA device that's currently active. */
 	if (pci_enumerate_bus(sc, pci_primary_vga, NULL))
