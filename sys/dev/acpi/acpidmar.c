@@ -545,6 +545,7 @@ struct acpidmar_drhd_softc {
 
 	/* root table of paddrs for contexts for this remapper. */
 	struct root_table			*ads_rtable;
+	struct vm_page				*ads_rtable_pg;
 	TAILQ_HEAD(,acpidmar_domain)		 ads_domains;
 	void				 	 (*ads_flush_tlb)(
 						     struct acpidmar_drhd_softc *,
@@ -556,6 +557,8 @@ struct acpidmar_drhd_softc {
 						     uint8_t);
 };
 
+void	acpidmar_enable_drhd(struct acpidmar_drhd_softc *ads);
+void	acpidmar_set_rtp(struct acpidmar_drhd_softc *ads);
 void	acpidmar_flush_tlb_register(struct acpidmar_drhd_softc *ads,
 	    struct acpidmar_domain *ad);
 void	acpidmar_flush_ctx_register(struct acpidmar_drhd_softc *,
@@ -695,6 +698,7 @@ struct acpidmar_pci_domain {
 	struct acpidmar_bridges			apd_bridges; /* bridge tree */
 	TAILQ_HEAD(,acpidmar_drhd_softc)	apd_drhds;
 	TAILQ_HEAD(,acpidmar_rmrr_softc)	apd_rmrrs;
+	bool					apd_enabled;
 };
 
 struct acpidmar_softc {
@@ -715,6 +719,7 @@ struct cfdriver acpidmar_cd = {
 	NULL, "acpidmar", DV_DULL
 };
 
+void	acpidmar_enable_iommu(int domain);
 void	acpidmar_add_drhd(struct acpidmar_softc *, struct acpidmar_drhd *);
 void	acpidmar_add_rmrr(struct acpidmar_softc *, struct acpidmar_rmrr *);
 bool	acpidmar_single_devscope_matches(pci_chipset_tag_t,
@@ -869,34 +874,13 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 	TAILQ_INIT(&pglist);
 	(void)uvm_pglistalloc(PAGE_SIZE, 0, -1, PAGE_SIZE, 0, &pglist,
 		1, UVM_PLA_WAITOK | UVM_PLA_ZERO);
-	pg = TAILQ_FIRST(&pglist);
-
+	ads->ads_rtable_pg = pg = TAILQ_FIRST(&pglist);
 	ads->ads_rtable = (struct root_table *)pmap_map_direct(pg);
 	/* Purge allocation zeroing from cache before the hardware sees it. */
 	acpidmar_flush_cache(ads, (vaddr_t)ads->ads_rtable, PAGE_SIZE);
 
-	/*
-	 * Set root address. root address has no flags since we don't
-	 * want extended root entries so value is just the physical address
-	 * of the root table page.
-	 */
-	bus_space_write_8(sc->as_memt, ads->ads_memh, DMAR_RTADDR_REG,
-	    VM_PAGE_TO_PHYS(pg));
-	/*
-	 * XXX TE, EAFL, QIE, IRE and CFI  must be written to this field once
-	 * enabled (since a 0 write is the same as disabling it).
-	 * we assume here that we haven't yet enabled them.
-	 */
-	/* program root context */
-	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_GCMD_REG,
-	    DMAR_GCMD_SRTP | ads->ads_gcmd_persist);
-	while ((bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_GSTS_REG) &
-	    DMAR_GSTS_RTPS) == 0)
-		SPINLOCK_SPIN_HOOK;
-	    
-	/* invalidate ctx, pasid (later) and tlb caches. */
-	ads->ads_flush_ctx(ads, CTX_FLUSH_GLOBAL, 0, 0, 0);
-	ads->ads_flush_tlb(ads, NULL);
+	/* program hardware and flush caches */
+	acpidmar_set_rtp(ads);
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
@@ -946,6 +930,7 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 	struct acpi_softc	*psc = (struct acpi_softc *)parent;
 	struct acpi_attach_args	*aaa = aux;
 	struct acpi_dmar	*dmar = (struct acpi_dmar *)aaa->aaa_table;
+	extern void		(*pci_enable_iommu)(int domain);
 	caddr_t			 addr;
 
 	if (acpidmar_softc != NULL) {
@@ -961,6 +946,8 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 	}
 
 	printf(": checks out as valid\n");
+
+	pci_enable_iommu = acpidmar_enable_iommu;
 
 	addr = (caddr_t)(dmar + 1);
 
@@ -1552,6 +1539,79 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		/*struct pci_tree_device	*dev = (struct pci_tree_device *)entry; */
 		/* pa->pa_tag = dev->ptd_dmatag */
 	}
+}
+
+void
+acpidmar_set_rtp(struct acpidmar_drhd_softc *ads)
+{
+	struct acpidmar_softc	*sc = acpidmar_softc;
+
+	/*
+	 * Set root address. root address has no flags since we don't
+	 * want extended root entries so value is just the physical address
+	 * of the root table page.
+	 */
+	bus_space_write_8(sc->as_memt, ads->ads_memh, DMAR_RTADDR_REG,
+	    VM_PAGE_TO_PHYS(ads->ads_rtable_pg));
+	/* program root context */
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_GCMD_REG,
+	    DMAR_GCMD_SRTP | ads->ads_gcmd_persist);
+	while ((bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_GSTS_REG) &
+	    DMAR_GSTS_RTPS) == 0)
+		SPINLOCK_SPIN_HOOK;
+
+	/* We've just reset the root table, so clean up caches and tlbs */
+	ads->ads_flush_ctx(ads, CTX_FLUSH_GLOBAL, 0, 0, 0);
+	ads->ads_flush_tlb(ads, NULL);
+}
+
+void
+acpidmar_enable_iommu(int domain)
+{
+	struct acpidmar_softc		*sc = acpidmar_softc;
+	struct acpidmar_drhd_softc	*ads;
+
+	if (sc == NULL)
+		panic("%s: no softc!", __func__);
+	if (domain >= sc->as_num_pci_domains)
+		panic("%s: domain %d out of range.", __func__, domain);
+	if (sc->as_domains[domain] == NULL)
+		panic("%s: domain %d not seen.", __func__, domain);
+
+	sc->as_domains[domain]->apd_enabled = true;
+	TAILQ_FOREACH(ads, &sc->as_domains[domain]->apd_drhds, ads_entry) {
+		acpidmar_enable_drhd(ads);
+	}
+}
+
+void
+acpidmar_enable_drhd(struct acpidmar_drhd_softc *ads)
+{
+	struct acpidmar_softc	*sc = acpidmar_softc;
+
+	/* Already on? */
+	if (ads->ads_gcmd_persist & DMAR_GCMD_TE)
+		return;
+	printf("%s: enabling drhd %llx\n", __func__,
+		ads->ads_addr);
+	return;
+
+	acpidmar_flush_write_buffer(ads);
+
+	/* turn on fault logging when we can support */
+	/* make sure root entry is set */
+
+	acpidmar_set_rtp(ads);
+
+	/* turn on translation */
+	ads->ads_gcmd_persist |= DMAR_GCMD_TE;
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_GCMD_REG,
+	    ads->ads_gcmd_persist);
+	while ((bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_GSTS_REG) &
+	    DMAR_GSTS_TES) == 0)
+		SPINLOCK_SPIN_HOOK;
+
+	/* turn off protected memory crap */
 }
 
 /* bootstrapping - how to handle gpu enablement. */
