@@ -1509,8 +1509,7 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 	 */
 	TAILQ_FOREACH(entry, &parent->ptb_children, pte_entry) {
 		if (entry->pte_tag == pa->pa_tag) {
-			/* report we found it, swizzle dma tag and return */
-			return;
+			goto add_tag;
 		}
 	}
 
@@ -1571,6 +1570,10 @@ acpidmar_pci_hook(pci_chipset_tag_t pc, struct pci_attach_args *pa)
 		/*struct pci_tree_device	*dev = (struct pci_tree_device *)entry; */
 		/* pa->pa_tag = dev->ptd_dmatag */
 	}
+
+add_tag:
+	if (entry->pte_drhd->ads_enabled)
+		pa->pa_dmat = entry->pte_domain->ad_dmat;
 }
 
 void
@@ -1629,6 +1632,7 @@ acpidmar_enable_drhd(struct acpidmar_drhd_softc *ads)
 	return;
 
 	acpidmar_flush_write_buffer(ads);
+	ads->ads_enabled = true;
 
 	/* turn on fault logging when we can support */
 	/* make sure root entry is set */
