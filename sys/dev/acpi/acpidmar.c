@@ -1232,9 +1232,11 @@ acpidmar_create_domain(pci_chipset_tag_t pc, struct acpidmar_pci_domain *domain,
 	 * XXX should make these strings unique but then they'd never be
 	 * freeable.
 	 */
-	if (sg_dmatag_alloc("vt-d iommmu", ad, 0, ad->ad_aspace->address_size,
-	    acpidmar_domain_bind_page, acpidmar_domain_unbind_page,
-	    acpidmar_domain_flush_tlb, &ad->ad_dmat) != 0)
+	/* we start at 16mb to avoid isa ranges. */
+	if (sg_dmatag_alloc("vt-d iommmu", ad, 16*1024*1024,
+	    ad->ad_aspace->address_size, acpidmar_domain_bind_page,
+	    acpidmar_domain_unbind_page, acpidmar_domain_flush_tlb,
+	    &ad->ad_dmat) != 0)
 		panic("%s: unable to create dma tag", __func__);
 	/* allocate root pagetable */
 	TAILQ_INIT(&pglist);
