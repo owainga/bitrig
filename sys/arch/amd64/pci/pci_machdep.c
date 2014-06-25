@@ -711,3 +711,108 @@ pci_set_powerstate_md(pci_chipset_tag_t pc, pcitag_t tag, int state, int pre)
 	acpi_pci_set_powerstate(pc, tag, state, pre);
 #endif
 }
+
+#if NACPIDMAR > 0
+void acpidmar_msi_hwmask(struct pic *, int);
+void acpidmar_msi_hwunmask(struct pic *, int);
+void acpidmar_msi_addroute(struct pic *, struct cpu_info *, int, int, int);
+void acpidmar_msi_delroute(struct pic *, struct cpu_info *, int, int, int);
+
+struct pic acpidmar_msi_pic = {
+	{0, {NULL}, NULL, 0, "dmarmsi", NULL, 0, 0},
+	PIC_MSI,
+#ifdef MULTIPROCESSOR
+	{},
+#endif
+	acpidmar_msi_hwmask,
+	acpidmar_msi_hwunmask,
+	acpidmar_msi_addroute,
+	acpidmar_msi_delroute,
+	NULL,
+	ioapic_edge_stubs
+};
+
+struct acpidmar_drhd_softc;
+
+struct acpidmar_pic {
+	struct pic 			 ap_pic;
+	struct acpidmar_drhd_softc	*ap_ads;
+};
+struct acpidmar_pic	*acpidmar_new_intrsrc(struct acpidmar_drhd_softc *);
+void			*acpidmar_intr_establish(void *, int, int (*)(void *),
+			     void *, const char *);
+
+struct acpidmar_pic *
+acpidmar_new_intrsrc(struct acpidmar_drhd_softc *ads)
+{
+	struct acpidmar_pic 	*ap;
+
+	if ((ap = malloc(sizeof(*ap), M_DEVBUF, M_WAITOK|M_CANFAIL|M_ZERO)) ==
+	    NULL)
+		return (NULL);
+	strlcpy(ap->ap_pic.pic_dev.dv_xname, "dmarpic",
+	    sizeof(ap->ap_pic.pic_dev.dv_xname));
+	ap->ap_pic.pic_type = PIC_MSI,
+#ifdef MULTIPROCESSOR
+	/* XXX skipping this is silly... */
+	mtx_init(&ap->ap_pic.pic_mutex, IPL_NONE);
+#endif
+	ap->ap_pic.pic_hwmask = acpidmar_msi_hwmask;
+	ap->ap_pic.pic_hwunmask = acpidmar_msi_hwunmask;
+	ap->ap_pic.pic_addroute = acpidmar_msi_addroute;
+	ap->ap_pic.pic_delroute = acpidmar_msi_delroute;
+	ap->ap_pic.pic_edge_stubs = ioapic_edge_stubs;
+
+	ap->ap_ads = ads;
+
+	return (ap);
+}
+
+void *
+acpidmar_intr_establish(void *ctx, int level, int (*func)(void *), void *arg,
+    const char *what)
+{
+	struct acpidmar_pic	*ap = ctx;
+
+	/*
+	 * pin is 0 here since we should only have one interrup per drhd
+	 * device. so there is no need to disambiguate. Pin doesn't actualy
+	 * make sense for msi, anyway, so any selection would be arbitrary.
+	 */
+	return intr_establish(-1, &ap->ap_pic, 0, IST_PULSE, level,
+	    func, arg, what);
+}
+
+/* disestablish and freeing functions currently elided due to no need. */
+
+void
+acpidmar_msi_hwmask(struct pic *pic, int pin)
+{
+}
+
+void
+acpidmar_msi_hwunmask(struct pic *pic, int pin)
+{
+}
+
+extern void	acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t addr,
+		    uint32_t vec);
+void
+acpidmar_msi_addroute(struct pic *pic, struct cpu_info *ci, int pin, int vec,
+    int type)
+{
+	struct acpidmar_pic	*ap = (struct acpidmar_pic *)pic;
+	uint64_t		 addr;
+
+	addr = 0xfee00000UL | (ci->ci_apicid << 12);
+
+	acpidmar_setup_msi(ap->ap_ads, addr, vec);
+}
+
+void
+acpidmar_msi_delroute(struct pic *pic, struct cpu_info *ci, int pin, int vec,
+    int type)
+{
+	/* XXX fill me in */
+}
+#endif /* NACPIDMAR > 0 */

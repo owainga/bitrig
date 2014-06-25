@@ -153,6 +153,15 @@
 #define DMAR_PMEN_EPM		(1<<31) /* enable/disable */
 #define DMAR_PMEN_PRS		(1<<0)	/* status. */
 
+/* 10.4.11 Fault Event Data Register. */
+#define DMAR_FEDATA_REG		0x3c
+
+/* 10.4.12 Fault Event Address Register. */
+#define DMAR_FEADDR_REG		0x40
+
+/* 10.4.12 Fault Event Upper Address Register. */
+#define DMAR_FEUADDR_REG	0x44
+
 
 int	 acpidmar_match(struct device *, void *, void *);
 void	 acpidmar_attach(struct device *, struct device *, void *);
@@ -524,6 +533,8 @@ enum ctx_flush_type {
 	CTX_FLUSH_DOMAIN,
 	CTX_FLUSH_DEVICE,
 };
+struct acpidmar_pic;
+
 /*
  * acpidmar_drhd_softc encapsulates all of the state required to handle a single
  * remapping device.
@@ -531,6 +542,8 @@ enum ctx_flush_type {
 struct acpidmar_drhd_softc {
 	TAILQ_ENTRY(acpidmar_drhd_softc)	 ads_entry;
 	uint8_t					*ads_scopes;
+	struct acpidmar_pic			*ads_pic;
+	void					*ads_intr;
 	bus_space_handle_t			 ads_memh;
 	struct mutex				 ads_reg_lock;
 	uint64_t				 ads_addr;
@@ -555,7 +568,13 @@ struct acpidmar_drhd_softc {
 						     enum ctx_flush_type,
 						     uint16_t, uint16_t,
 						     uint8_t);
+	bool					 ads_enabled;
 };
+
+/* interrupt code defined on a machine dependant basis */
+struct acpidmar_pic	*acpidmar_new_intrsrc(struct acpidmar_drhd_softc *);
+void			*acpidmar_intr_establish(void *, int, int (*)(void *),  
+			     void *, const char *);
 
 void	acpidmar_enable_drhd(struct acpidmar_drhd_softc *ads);
 void	acpidmar_set_rtp(struct acpidmar_drhd_softc *ads);
@@ -732,6 +751,9 @@ void	acpidmar_create_domain(pci_chipset_tag_t, struct acpidmar_pci_domain *,
 	    struct pci_tree_entry *);
 struct vm_page *acpidmar_alloc_page(struct acpidmar_domain *, int);
 
+int	acpidmar_intr(void *);
+
+/* XXX drhd should probably be a separate device... */
 void
 acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 {
@@ -795,6 +817,8 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 
 	ads = malloc(sizeof(*ads), M_DEVBUF, M_WAITOK|M_ZERO);
 	mtx_init(&ads->ads_reg_lock, IPL_HIGH);
+
+	ads->ads_pic = acpidmar_new_intrsrc(ads);
 
 	if (bus_space_map(sc->as_memt, drhd->address, PAGE_SIZE, 0,
 	    &ads->ads_memh) != 0)
@@ -881,6 +905,12 @@ acpidmar_add_drhd(struct acpidmar_softc *sc, struct acpidmar_drhd *drhd)
 
 	/* program hardware and flush caches */
 	acpidmar_set_rtp(ads);
+
+	ads->ads_intr = acpidmar_intr_establish(ads->ads_pic, IPL_BIO,
+	    acpidmar_intr, ads, "acpidmar_drhd");
+	if (ads->ads_intr == NULL) {
+		panic("%s: failed to establish interrupt", __func__); /* XXX */
+	}
 
 	/* If we are the catch-all for this domain then root has us. */
 	if (ads->ads_flags & DMAR_DRHD_PCI_ALL) {
@@ -1883,4 +1913,36 @@ acpidmar_flush_write_buffer(struct acpidmar_drhd_softc *ads)
 	while ((bus_space_read_4(acpidmar_softc->as_memt, ads->ads_memh,
 	    DMAR_GSTS_REG) & DMAR_GSTS_WBFS) != 0)
 		SPINLOCK_SPIN_HOOK;
+}
+
+void
+acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t, uint32_t);
+void
+acpidmar_setup_msi(struct acpidmar_drhd_softc *ads, uint64_t addr, uint32_t vec)
+{
+	struct acpidmar_softc	*sc = acpidmar_softc;
+
+	mtx_enter(&ads->ads_reg_lock);
+
+	/* write data pointer  31:9 reserved, 8 low prio?, 7:0 vector */
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FEDATA_REG,
+	    vec);
+	/*
+	 * Set up address. MD code programmed the address register based on
+	 * apic mode etc. We just program it.
+	 */
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FEADDR_REG,
+	    addr & ((1ULL<<32)-1));
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FEUADDR_REG,
+	    (addr >> 32));
+	mtx_leave(&ads->ads_reg_lock);
+}
+
+int
+acpidmar_intr(void *ctx)
+{
+	//struct acpidmar_drhd_softc	*ads = ctx;
+
+	/* msi, always ours */
+	return (1);
 }
