@@ -48,7 +48,7 @@
 #define DMAR_CAP_DWD		(1ULL<<54)
 #define DMAR_CAP_MAMV_MASK	0x3fULL
 #define DMAR_CAP_MAMV_SHIFT	48
-#define DMAR_CAP_NFR_MASK	0xfULL
+#define DMAR_CAP_NFR_MASK	0xffULL
 #define DMAR_CAP_NFR_SHIFT	40
 #define DMAR_CAP_PSI		(1ULL<<39)
 #define DMAR_CAP_SLLPS_MASK	0xfULL
@@ -148,10 +148,23 @@
 #define DMAR_CCMD_DID_MASK	(0xffffULL)
 #define DMAR_CCMD_DID_SHIFT	0
 
-/* 10.4.16 Protected Memory Enable Register. */
-#define DMAR_PMEN_REG	0x64
-#define DMAR_PMEN_EPM		(1<<31) /* enable/disable */
-#define DMAR_PMEN_PRS		(1<<0)	/* status. */
+/* 10.4.9 Fault Status Register. */
+#define DMAR_FSTS_REG		0x34
+#define DMAR_FSTS_FRI_MASK	(0xff)
+#define DMAR_FSTS_FRI_SHIFT	(8)
+#define DMAR_FSTS_PRO		(1<<7)
+#define DMAR_FSTS_ITE		(1<<6)
+#define DMAR_FSTS_ICE		(1<<5)
+#define DMAR_FSTS_IQE		(1<<4)
+#define DMAR_FSTS_APF		(1<<3)
+#define DMAR_FSTS_APO		(1<<2)
+#define DMAR_FSTS_PPF		(1<<1)
+#define DMAR_FSTS_PFO		(1<<0)
+
+/* 10.4.10 Fault Event Control Register. */
+#define DMAR_FECTL_REG		0x38
+#define DMAR_FECTL_IM		(1<<31)
+#define DMAR_FECTL_IP		(1<<30)
 
 /* 10.4.11 Fault Event Data Register. */
 #define DMAR_FEDATA_REG		0x3c
@@ -159,9 +172,36 @@
 /* 10.4.12 Fault Event Address Register. */
 #define DMAR_FEADDR_REG		0x40
 
-/* 10.4.12 Fault Event Upper Address Register. */
+/* 10.4.13 Fault Event Upper Address Register. */
 #define DMAR_FEUADDR_REG	0x44
 
+/* 10.4.13 Fault Recording Registers.
+ * register offset is dynamic, from capability. Also reg is 128 bits.
+ * since it is recommended in the manual that you read the highest doubleword,
+ * then the rest we encode things thusly:
+ * HFRCD is highest. UFRCD is the second highest 32 bits and LFRCD is the bottom
+ * 64.
+ */
+#define DMAR_HFRCD_F		(1<<31)
+#define DMAR_HFRCD_T		(1<<30)
+#define DMAR_HFRCD_AT_MASK	(2ULL)
+#define DMAR_HFRCD_AT_SHIFT	(28)
+#define DMAR_HFRCD_PV_MASK	(0x1fffffULL<<62)
+#define DMAR_HFRCD_PV_SHIFT	(9)
+#define DMAR_HFRCD_FR_MASK	(0xffULL)
+#define DMAR_HFRCD_FR_SHIFT	(0)
+#define DMAR_UFRCD_PP		(1ULL<<31)
+#define DMAR_UFRCD_EXE		(1ULL<<30)
+#define DMAR_UFRCD_PRIV		(1ULL<<29)
+#define DMAR_UFRCD_SID_MASK	(0xffffULL<<31)
+#define DMAR_UFRCD_SID_SHIFT	0
+#define DMAR_LFRCD_FI_MASK	((1ULL<<12)-1)
+#define DMAR_LFRCD_FI_SHIFT	(0)
+
+/* 10.4.16 Protected Memory Enable Register. */
+#define DMAR_PMEN_REG	0x64
+#define DMAR_PMEN_EPM		(1<<31) /* enable/disable */
+#define DMAR_PMEN_PRS		(1<<0)	/* status. */
 
 int	 acpidmar_match(struct device *, void *, void *);
 void	 acpidmar_attach(struct device *, struct device *, void *);
@@ -1921,8 +1961,15 @@ acpidmar_flush_write_buffer(struct acpidmar_drhd_softc *ads)
 		SPINLOCK_SPIN_HOOK;
 }
 
-void
-acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t, uint32_t);
+void	acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t, uint32_t);
+void	acpidmar_mask_interrupt(struct acpidmar_drhd_softc *);
+void	acpidmar_unmask_interrupt(struct acpidmar_drhd_softc *);
+
+/*
+ * acpidmar_setup_msi programs the given address and vector into the msi
+ * registers for fault interrupts. The format of these registers depends on the
+ * MD apic mode and thus is provided by the MD caller.
+ */
 void
 acpidmar_setup_msi(struct acpidmar_drhd_softc *ads, uint64_t addr, uint32_t vec)
 {
@@ -1944,10 +1991,173 @@ acpidmar_setup_msi(struct acpidmar_drhd_softc *ads, uint64_t addr, uint32_t vec)
 	mtx_leave(&ads->ads_reg_lock);
 }
 
+/*
+ * acpidmar_mask_interrupt sets the mask bit in the FECTL register, masking
+ * interrupts from firing.
+ */
+void
+acpidmar_mask_interrupt(struct acpidmar_drhd_softc *ads)
+{
+	struct acpidmar_softc	*sc = acpidmar_softc;
+
+	mtx_enter(&ads->ads_reg_lock);
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FECTL_REG,
+	    DMAR_FECTL_IM);
+	/* posting read */
+	(void)bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_FECTL_REG);
+	mtx_leave(&ads->ads_reg_lock);
+}
+
+/*
+ * acpidmar_mask_interrupt clear the mask bit in the FECTL register, allowing
+ * interrupts to fire.
+ */
+void
+acpidmar_unmask_interrupt(struct acpidmar_drhd_softc *ads)
+{
+	struct acpidmar_softc	*sc = acpidmar_softc;
+
+	mtx_enter(&ads->ads_reg_lock);
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FECTL_REG, 0);
+	/* posting read */
+	(void)bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_FECTL_REG);
+	mtx_leave(&ads->ads_reg_lock);
+}
+
+
+const char *reason_to_string[] = {
+	[0x1] = "Root entry is not present",
+	[0x2] = "Context entry is not present",
+	[0x3] = "Invalid programming of context entry",
+	[0x4] = "Address is beyond maximum address width",
+	[0x5] = "Write access forbidden",
+	[0x6] = "Read access is forbidden",
+	[0x7] = "Failed to access page table entry",
+	[0x8] = "Failed to access root entry",
+	[0x9] = "Failed to access contexst entry via root table",
+	[0xa] = "Non-zero reserved field in root entry",
+	[0xb] = "Non-zero reserved field in context entry",
+	[0xc] = "Non-zero reserved field in second level pte",
+	[0xd] = "Present context enry blocks translations without PASID",
+	[0x10] = "PASID is enabled but PASID is 0",
+	[0x11] = "PASID larger than max supported",
+	[0x12] = "PASID entry is not present",
+	[0x13] = "Non-zero reserved field in PASID entry",
+	[0x14] = "Input address is not canonical",
+	[0x15] = "Error accessing FL_PML4 entry",
+	[0x16] = "Non-zero reserved field in first-level paging entry",
+	[0x17] = "Error accessing next level FL paging entry",
+	[0x18] = "xecute permission denied",
+	[0x19] = "ERE is zero but ER bit set",
+	[0x1a] = "SRE is zero but PR bit set",
+	[0x1b] = "RTT is 0 but request has PASID",
+	[0x20] = "Reserved field set in interrupt request",
+	[0x21] = "Interupt index is larger than table",
+	[0x22] = "IRTE is not present",
+	[0x23] = "Error accessing remaping table",
+	[0x24] = "Non-zero reserved field in IRTE",
+	[0x25] = "hardware blocked interrupt request in compatibility format",
+	[0x26] = "Interrupt source id verification failure",
+};
+
 int
 acpidmar_intr(void *ctx)
 {
-	//struct acpidmar_drhd_softc	*ads = ctx;
+	struct acpidmar_softc	*sc = acpidmar_softc;
+	struct acpidmar_drhd_softc	*ads = ctx;
+	uint32_t			 status;
+	uint8_t				 fri;
+	bus_addr_t			 fr_offset;
+	int				 fr_num;
+
+	fr_offset =  (ads->ads_cap & DMAR_CAP_FRO_MASK) >>
+	    DMAR_CAP_FRO_SHIFT;
+	fr_offset *= 16;
+	fr_num = ((ads->ads_cap & DMAR_CAP_NFR_MASK) >> DMAR_CAP_NFR_SHIFT) + 1;
+
+	mtx_enter(&ads->ads_reg_lock);
+	status = bus_space_read_4(sc->as_memt, ads->ads_memh, DMAR_FSTS_REG);
+	/*
+	 * We currently ignore the page requests, device tlb, and invalidateion
+	 * queue related bits. We only care about the primary fault registers.
+	 */
+	if ((status & DMAR_FSTS_PPF) == 0) {
+		printf("%s: no pending fault! (%d)\n", __func__, status);
+		goto ack;
+	}
+	fri = (status & DMAR_FSTS_FRI_MASK) >> DMAR_FSTS_FRI_SHIFT;
+
+	if (fri > fr_num) {
+		printf("%s: fri (%d) is bigger than num fault registers (%d)\n",
+		    __func__, fri, fr_num);
+		goto ack;
+	}
+
+	for (;;) {
+		const char	*reason_str;
+		uint64_t	lower;
+		uint32_t	highest, upper;
+		uint16_t	sid;
+		uint8_t		reason;
+		bool		read;
+		paddr_t		page_addr;
+		bus_addr_t	reg;
+
+		printf("%s: processing index %d\n", __func__, fri);
+		reg = fr_offset + fri*16;
+
+		/*
+		 * Hardware may write this as a bunch of double words, so first
+		 * we read the top 32 bytes to make sure the fault bit is set,
+		 * if it is we read the rrest. (see footnote 1 in 10.4.14).
+		 */
+		highest = bus_space_read_4(sc->as_memt, ads->ads_memh,
+		    fr_offset + 12);
+		if ((highest & DMAR_HFRCD_F) == 0)
+			break;
+		reason = (highest & DMAR_HFRCD_FR_MASK) >> DMAR_HFRCD_FR_SHIFT;
+		read = !!(highest & DMAR_HFRCD_T);
+
+		upper = bus_space_read_4(sc->as_memt, ads->ads_memh,
+		    fr_offset + 8);
+		sid = (upper & DMAR_UFRCD_SID_MASK) >> DMAR_UFRCD_SID_SHIFT;
+
+
+		lower = bus_space_read_8(sc->as_memt, ads->ads_memh,
+		    fr_offset);
+		page_addr = (lower & DMAR_LFRCD_FI_MASK) >> DMAR_LFRCD_FI_SHIFT;
+
+		/*
+		 * for now we ignore the rest of the bits since they relate to
+		 * first level translation, exec requests and PASID.
+		 */
+		
+		/* ack */
+		bus_space_write_4(sc->as_memt, ads->ads_memh,
+		    fr_offset + 12, DMAR_HFRCD_F);
+
+		if (reason > nitems(reason_to_string) ||
+		    reason_to_string[reason][0] == '\0')
+			reason_str = "Invalid reason";
+		else
+			reason_str = reason_to_string[reason];
+
+		printf("%s: recorded %s fault for %d:%d:%d for address 0x%llx"
+		     " reason \"%s\"", __func__, read ? "read" : "write",
+		     sid >> 16, sid>>3 & 0xfff8, sid & 7, page_addr,
+		     reason_str);
+		
+		fri++;
+		if (fri > fr_num)
+			fri = 0;
+
+	}
+	/* clear overflow and fault */
+	bus_space_write_4(sc->as_memt, ads->ads_memh, DMAR_FSTS_REG,
+	    DMAR_FSTS_PFO | DMAR_FSTS_PPF);
+
+ack:
+	mtx_leave(&ads->ads_reg_lock);
 
 	/* msi, always ours */
 	return (1);

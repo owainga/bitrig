@@ -784,19 +784,27 @@ acpidmar_intr_establish(void *ctx, int level, int (*func)(void *), void *arg,
 }
 
 /* disestablish and freeing functions currently elided due to no need. */
+extern void	acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t addr,
+		    uint32_t vec);
+extern void	acpidmar_mask_interrupt(struct acpidmar_drhd_softc *);
+extern void	acpidmar_unmask_interrupt(struct acpidmar_drhd_softc *);
 
 void
 acpidmar_msi_hwmask(struct pic *pic, int pin)
 {
+	struct acpidmar_pic	*ap = (struct acpidmar_pic *)pic;
+
+	acpidmar_mask_interrupt(ap->ap_ads);
 }
 
 void
 acpidmar_msi_hwunmask(struct pic *pic, int pin)
 {
+	struct acpidmar_pic	*ap = (struct acpidmar_pic *)pic;
+
+	acpidmar_unmask_interrupt(ap->ap_ads);
 }
 
-extern void	acpidmar_setup_msi(struct acpidmar_drhd_softc *, uint64_t addr,
-		    uint32_t vec);
 void
 acpidmar_msi_addroute(struct pic *pic, struct cpu_info *ci, int pin, int vec,
     int type)
